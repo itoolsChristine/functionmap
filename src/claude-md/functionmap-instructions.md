@@ -1,0 +1,55 @@
+<!-- FUNCTIONMAP:INSTRUCTIONS:BEGIN -->
+## Function Maps -- MANDATORY CHECK
+
+**THIS IS A BLOCKING REQUIREMENT when working on ANY project that has a function map.**
+
+**You MUST check function maps BEFORE writing new code, debugging issues, exploring architecture, or modifying existing code. No exceptions. No shortcuts. No "I'll check later." Check FIRST, act SECOND.**
+
+**If you skip this check, you will miss existing functionality, waste tokens grepping through source files when the map already tells you where things live, misuse library APIs, or misunderstand object behavior.**
+
+### Detection -- when does this apply?
+- **You are working on ANY project listed in the available maps below**
+- The project's path, `composer.json`, or code references another mapped project
+- Code calls a bundled third-party library (check the project index for a "Third-Party Libraries" table)
+
+### When this check is mandatory (every single time):
+- **Before exploring how a feature works** -- the map tells you where code lives without grepping. Check the map index first, load the relevant category, THEN read source.
+- Before creating ANY new function or method -- even "simple" ones
+- Before writing utilities, helpers, formatters, validators, transformers, or converters
+- Before implementing anything that manipulates strings, arrays, dates, files, uploads, HTML, URLs, or SQL
+- Before adding error handling, logging, caching, or security functions
+- Before writing database queries, schema operations, or record manipulation
+- **Before debugging** -- understand return types, object behavior, and extraction methods from the maps
+- **Before modifying existing code** -- check how APIs are meant to be called and what they return
+- **When verifying or reviewing code** -- cross-reference library usage against the maps
+- **Before writing code that calls a bundled third-party library** -- check its map for API surface and calling patterns
+- Whenever something "feels like it should already exist" -- it probably does
+
+### STOP-AND-CHECK rule (this is the part Claude keeps skipping):
+**When you are about to call Grep, Read, or any search tool to find/understand code in a mapped project: STOP.** Do not make that call yet. Instead, follow the discovery procedure below. The map is the table of contents. Source files are the chapters. You don't grep a book to find the chapter on authentication -- you check the table of contents first.
+
+### Discovery procedure (do ALL of these, every time -- no skipping):
+
+**Step 1 -- Project index:** Read `~/.claude/functionmap/{project}.md`. Find the category covering your domain. Read that category `.md` file -- it has function names, signatures, file paths, and line numbers.
+
+**Step 2 -- Dependencies:** Read `~/.claude/functionmap/{project}/libraries.md`. It lists other mapped projects this one depends on. Follow each dependency link and check those maps too. Dependencies chain: if A depends on B and B depends on C, check A, B, and C. (If the file doesn't exist, the project has no mapped dependencies -- note this in your accountability report.)
+
+**Step 3 -- Sub-projects:** Read `~/.claude/functionmap/{project}/_meta.json` and look for a `sub_projects` field. It lists sub-project map directories inside the project's map folder, each with its own category index (typically `categories.md`). These cover large embedded codebases. (If the field is absent, note "no sub-projects" in your accountability report.)
+
+**Step 4 -- Third-party libraries:** Scroll to the bottom of the project index (`{project}.md`) and look for a "Third-Party Libraries" table. It lists bundled libraries with links to their shared maps at `~/.claude/functionmap/third-party/{lib}/{version}/`. Open the relevant library map when the code touches that library. (If there is no table, note "no third-party libs" in your accountability report.)
+
+**Step 5 -- Now act.** Only implement new code after confirming NOTHING existing serves the need across all of the above. If something close exists but doesn't quite fit, prefer extending/wrapping it over reimplementing.
+
+### After checking (mandatory accountability):
+**Report ALL five steps**, not just the ones that found results. Example:
+> Checked `myproject.md` -> auth category, found `validateToken()`. Dependencies: `libraries.md` references utils, checked relevant categories. Sub-projects: none. Third-party: none.
+
+- **Surface near-misses**: If you find something that does 70-90% of what's needed, tell the user before deciding to extend vs. reimplement.
+- **Use existing functions**: If you find an exact match, USE IT. Don't write a "simpler version" or a "slightly different" one.
+
+### This applies to spawned agents too:
+Teammates, subagents, and swarm members implementing code on mapped projects MUST follow this same check. The team lead should include function map checking in agent prompts for any implementation work.
+
+### Stale maps:
+Function maps may not include functions added since the last `/functionmap` run. If you suspect something should exist but the map doesn't show it, do a quick `Grep` of the source before implementing. Maps are a fast index, not a replacement for the actual codebase.
+<!-- FUNCTIONMAP:INSTRUCTIONS:END -->
