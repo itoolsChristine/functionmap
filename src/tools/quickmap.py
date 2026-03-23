@@ -10,9 +10,9 @@ Requires a prior full /functionmap run (needs _hashes.json, _functions.json,
 _taxonomy.json, _meta.json).
 
 Usage:
-    python quickmap.py --project squimsh
-    python quickmap.py --project squimsh --ignore-dir tests
-    python quickmap.py --project squimsh --include-vendor
+    python quickmap.py --project my-project
+    python quickmap.py --project my-project --ignore-dir tests
+    python quickmap.py --project my-project --include-vendor
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from functionmap import (
     _read_text,
     _write_text,
     iter_source_files,
+    resolve_root_path_glob,
     scan_js_ts,
     scan_php,
     update_registry,
@@ -490,8 +491,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     continue
                 sub_root = sub_config.get("root_path", "")
                 if not sub_root or not Path(sub_root).exists():
-                    print(f"[quickmap] WARNING: Sub-project '{sub_name}' root not found: {sub_root}")
-                    continue
+                    # Try auto-resolve via glob pattern
+                    project_root = meta.get("root_path", "")
+                    resolved = resolve_root_path_glob(sub_config, project_root) if project_root else None
+                    if resolved:
+                        print(f"[quickmap] Auto-resolved '{sub_name}' path: {sub_root} -> {resolved}")
+                        sub_config["root_path"] = resolved
+                        sub_root = resolved
+                        # Update _meta.json with resolved path
+                        meta["sub_projects"][sub_name]["root_path"] = resolved
+                        _write_text(meta_path, json.dumps(meta, indent=2, sort_keys=True))
+                        # Also update the sub-project's own _meta.json
+                        sub_meta_path = (project_dir / sub_name) / "_meta.json"
+                        if sub_meta_path.exists():
+                            sub_meta = json.loads(_read_text(sub_meta_path))
+                            sub_meta["root_path"] = resolved
+                            _write_text(sub_meta_path, json.dumps(sub_meta, indent=2, sort_keys=True))
+                    else:
+                        print(f"[quickmap] WARNING: Sub-project '{sub_name}' root not found: {sub_root}")
+                        if sub_config.get("root_path_glob"):
+                            print(f"[quickmap]   Glob '{sub_config['root_path_glob']}' matched no directories")
+                        continue
 
                 sub_dir = project_dir / sub_name
                 if not sub_dir.exists():

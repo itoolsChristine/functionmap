@@ -25,8 +25,37 @@
 - **Before writing code that calls a bundled third-party library** -- check its map for API surface and calling patterns
 - Whenever something "feels like it should already exist" -- it probably does
 
+### MCP-accelerated discovery (preferred when available)
+
+When `functionmap_*` MCP tools are available (check your tool list), use them INSTEAD of the Read-based procedure below. They are faster and waste less context.
+
+- **Find a function by name:** `functionmap_search(name="select", project="myproject")`
+- **Keyword search:** `functionmap_search(query="upload", project="myproject")`
+- **Browse categories:** `functionmap_categories(project="myproject")`
+- **Functions in a category:** `functionmap_categories(project="myproject", category="database")`
+- **Full details + call graph:** `functionmap_detail(project="myproject", name="select")`
+- **List all projects:** `functionmap_projects()`
+
+The 5-step procedure below still applies conceptually (check project, dependencies, sub-projects, third-party, then act) -- the MCP tools just make each step faster:
+- Step 1 (project index): `functionmap_categories(project=...)` then `functionmap_search(...)`
+- Step 2 (dependencies): Check `functionmap_detail` for cross-project references, or `functionmap_projects()` to see what's available
+- Step 3 (sub-projects): `functionmap_projects()` shows sub-projects
+- Step 4 (third-party): `functionmap_categories(project=...)` surfaces third-party libs
+
+**Fall back to Read-based discovery** when MCP tools are not available.
+
+**Determining which project to search:** Call `functionmap_projects()` -- it returns all projects with root_paths and dependency lists. Match your current working directory against root_paths to find the right project. Check the project's `dependencies` field to know what library projects to also search.
+
+**Dual-search (mandatory):** Always search BOTH by name AND by keyword before concluding a function doesn't exist. If not found in the main project, check its dependencies too.
+
+**Third-party libraries:** `functionmap_search(name="ajax", project="third-party/jquery/2.1.4")`. Discover available libraries via `functionmap_projects()` (entries with `type: "third-party"` include `used_by` showing which projects bundle them).
+
+**Sub-projects:** `functionmap_search(query="compaction", project="myproject/subproject")`. Listed in `functionmap_projects()` with `type: "sub-project"`.
+
+**When to fall back to Read:** The MCP returns code examples when browsing a specific category (`patterns` field in `functionmap_categories` response), and dependency narrative + project overview when browsing a project (`dependencies_narrative` and `overview` fields in `functionmap_categories` response). Fall back to Read only when you need the full category markdown layout or want to verify something directly in source.
+
 ### STOP-AND-CHECK rule (this is the part Claude keeps skipping):
-**When you are about to call Grep, Read, or any search tool to find/understand code in a mapped project: STOP.** Do not make that call yet. Instead, follow the discovery procedure below. The map is the table of contents. Source files are the chapters. You don't grep a book to find the chapter on authentication -- you check the table of contents first.
+**When you are about to call Grep, Read, or any search tool to find/understand code in a mapped project: STOP.** Do not make that call yet. Instead, use the MCP tools above if available, or follow the discovery procedure below. The map is the table of contents. Source files are the chapters. You don't grep a book to find the chapter on authentication -- you check the table of contents first.
 
 ### Discovery procedure (do ALL of these, every time -- no skipping):
 

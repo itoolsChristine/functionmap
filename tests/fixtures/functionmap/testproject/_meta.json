@@ -1,0 +1,9 @@
+{
+  "file_count": 3,
+  "function_count": 10,
+  "generated_at": "2026-03-20T10:00:00",
+  "ignore_dirs": ["vendor", "node_modules"],
+  "include_vendor": false,
+  "project": "testproject",
+  "root_path": "D:/_Source/testproject"
+}

@@ -1,7 +1,8 @@
 # Project-specific
 .claude/
 substitutions.local.json
-PLAN.md
+plans/
+docs/
 
 # Python
 __pycache__/
@@ -21,6 +22,7 @@ venv/
 env/
 
 # Testing
+temp/
 .pytest_cache/
 .coverage
 htmlcov/

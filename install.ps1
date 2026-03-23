@@ -1,6 +1,10 @@
 # install.ps1 -- Functionmap installer for Windows PowerShell
 # Usage: irm https://raw.githubusercontent.com/itoolsChristine/functionmap/main/install.ps1 | iex
 #Requires -Version 5.1
+param(
+    [switch]$Mcp,
+    [switch]$NoMcp
+)
 $ErrorActionPreference = "Stop"
 
 # ============================================================================
@@ -14,11 +18,27 @@ $ToolsDir   = Join-Path $ClaudeDir "tools\functionmap"
 $CommandsDir = Join-Path $ClaudeDir "commands"
 $DocsDir    = Join-Path $ClaudeDir "docs"
 $MapsDir    = Join-Path $ClaudeDir "functionmap"
+$McpDir     = Join-Path $ClaudeDir "functionmap-mcp"
 $ClaudeMd   = Join-Path $ClaudeDir "CLAUDE.md"
+$ClaudeJson = Join-Path $HomeDir ".claude.json"
 
-$ToolFiles    = @("functionmap.py", "categorize.py", "quickmap.py", "thirdparty.py", "describe.py")
+$ToolFiles    = @("functionmap.py", "categorize.py", "quickmap.py", "thirdparty.py", "describe.py", "build-callgraph.cjs")
 $CommandFiles = @("functionmap.md", "functionmap-update.md")
-$DocFiles     = @("functionmap-help.md")
+$DocFiles     = @("functionmap-help.md", "functionmap-mcp.md")
+$McpFiles     = @("server.py", "index.py", "search.py", "requirements.txt")
+
+# ============================================================================
+#  CLI flag handling
+# ============================================================================
+
+$script:InstallMcp = ""   # "" = undecided, "yes" = include MCP, "no" = skip MCP
+
+if ($Mcp -and $NoMcp) {
+    Write-Host "  [ERROR] Cannot specify both -Mcp and -NoMcp" -ForegroundColor Red
+    exit 1
+}
+if ($Mcp)   { $script:InstallMcp = "yes" }
+if ($NoMcp) { $script:InstallMcp = "no" }
 
 # ============================================================================
 #  Banner
@@ -158,6 +178,7 @@ function Confirm-Install {
     $existingTools    = $false
     $existingCmds     = $false
     $existingDocs     = $false
+    $existingMcp      = $false
     $existingClaudeMd = $false
     $existingMaps     = $false
     $script:IsUpgrade = $false
@@ -165,10 +186,11 @@ function Confirm-Install {
     foreach ($f in $ToolFiles) { if (Test-Path (Join-Path $ToolsDir $f)) { $existingTools = $true; break } }
     foreach ($f in $CommandFiles) { if (Test-Path (Join-Path $CommandsDir $f)) { $existingCmds = $true; break } }
     foreach ($f in $DocFiles) { if (Test-Path (Join-Path $DocsDir $f)) { $existingDocs = $true; break } }
+    foreach ($f in $McpFiles) { if (Test-Path (Join-Path $McpDir $f)) { $existingMcp = $true; break } }
     if (Test-Path $ClaudeMd) { $existingClaudeMd = $true }
     if ((Test-Path $MapsDir) -and (Get-ChildItem $MapsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) { $existingMaps = $true }
 
-    if ($existingTools -or $existingCmds -or $existingDocs) {
+    if ($existingTools -or $existingCmds -or $existingDocs -or $existingMcp) {
         $script:IsUpgrade = $true
     }
 
@@ -185,6 +207,7 @@ function Confirm-Install {
     if ($existingTools)    { Write-Host "    - Python tools ($ToolsDir)" }
     if ($existingCmds)     { Write-Host "    - Skill commands (functionmap.md, functionmap-update.md)" }
     if ($existingDocs)     { Write-Host "    - Help documentation (functionmap-help.md)" }
+    if ($existingMcp)      { Write-Host "    - MCP server ($McpDir)" }
     if ($existingClaudeMd) { Write-Host "    - CLAUDE.md (sentinel blocks will be updated, not replaced)" }
     if ($existingMaps)     { Write-Host "    - Generated function maps ($MapsDir)" }
     if (-not $existingTools -and -not $existingCmds -and -not $existingDocs -and -not $existingClaudeMd -and -not $existingMaps) {
@@ -221,6 +244,7 @@ function Backup-Existing {
     foreach ($f in $ToolFiles) { if (Test-Path (Join-Path $ToolsDir $f)) { $hasExisting = $true; break } }
     foreach ($f in $CommandFiles) { if (Test-Path (Join-Path $CommandsDir $f)) { $hasExisting = $true; break } }
     foreach ($f in $DocFiles) { if (Test-Path (Join-Path $DocsDir $f)) { $hasExisting = $true; break } }
+    foreach ($f in $McpFiles) { if (Test-Path (Join-Path $McpDir $f)) { $hasExisting = $true; break } }
     if (Test-Path $ClaudeMd) { $hasExisting = $true }
 
     if (-not $hasExisting) {
@@ -233,6 +257,7 @@ function Backup-Existing {
     New-Item -ItemType Directory -Path "$script:BackupDir\tools" -Force | Out-Null
     New-Item -ItemType Directory -Path "$script:BackupDir\commands" -Force | Out-Null
     New-Item -ItemType Directory -Path "$script:BackupDir\docs" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$script:BackupDir\mcp" -Force | Out-Null
 
     foreach ($f in $ToolFiles) {
         $src = Join-Path $ToolsDir $f
@@ -251,6 +276,11 @@ function Backup-Existing {
         if (Test-Path $src) { Copy-Item $src "$script:BackupDir\docs\$f" -Force }
     }
 
+    foreach ($f in $McpFiles) {
+        $src = Join-Path $McpDir $f
+        if (Test-Path $src) { Copy-Item $src "$script:BackupDir\mcp\$f" -Force }
+    }
+
     if (Test-Path $ClaudeMd) { Copy-Item $ClaudeMd "$script:BackupDir\CLAUDE.md" -Force }
 
     # Back up generated function maps
@@ -262,8 +292,56 @@ function Backup-Existing {
     Write-Ok "Pre-install backup created: $script:BackupDir"
 }
 
+function Get-McpChoice {
+    # Already decided via CLI flag
+    if ($script:InstallMcp -eq "yes" -or $script:InstallMcp -eq "no") {
+        if ($script:InstallMcp -eq "yes") {
+            Write-Info "MCP server: included (-Mcp flag)"
+        } else {
+            Write-Info "MCP server: excluded (-NoMcp flag)"
+        }
+        return
+    }
+
+    $mcpPreviouslyInstalled = Test-Path (Join-Path $McpDir "server.py")
+
+    Write-Host ""
+    Write-Host "  The MCP server lets Claude search function maps instantly."
+    Write-Host "  Without it, Claude reads map files directly (still works, uses more context)."
+    Write-Host ""
+
+    # Non-interactive: default yes
+    try {
+        if ($script:IsUpgrade -and -not $mcpPreviouslyInstalled) {
+            # Upgrade without existing MCP: default No (respects prior choice)
+            $answer = Read-Host "  Include MCP server? [y/N]"
+            if ($answer -match "^[yY]") {
+                $script:InstallMcp = "yes"
+            } else {
+                $script:InstallMcp = "no"
+            }
+        } else {
+            # Fresh install or MCP already present: default Yes
+            $answer = Read-Host "  Include MCP server for faster lookups? (recommended) [Y/n]"
+            if ($answer -match "^[nN]") {
+                $script:InstallMcp = "no"
+            } else {
+                $script:InstallMcp = "yes"
+            }
+        }
+    } catch {
+        # Non-interactive: default yes
+        $script:InstallMcp = "yes"
+        Write-Info "Non-interactive mode: including MCP server"
+    }
+}
+
 function New-Directories {
-    @($ToolsDir, $CommandsDir, $DocsDir, $MapsDir) | ForEach-Object {
+    $dirs = @($ToolsDir, $CommandsDir, $DocsDir, $MapsDir)
+    if ($script:InstallMcp -eq "yes") {
+        $dirs += $McpDir
+    }
+    $dirs | ForEach-Object {
         if (-not (Test-Path $_)) {
             New-Item -ItemType Directory -Path $_ -Force | Out-Null
         }
@@ -279,17 +357,27 @@ function Install-Files {
     foreach ($f in $ToolFiles) {
         Get-InstallFile "src/tools/$f" (Join-Path $ToolsDir $f)
     }
-    Write-Ok "Python tools installed (5 files)"
+    Write-Ok "Tools installed (6 files)"
 
     foreach ($f in $CommandFiles) {
         Get-InstallFile "src/commands/$f" (Join-Path $CommandsDir $f)
     }
     Write-Ok "Skill commands installed (2 files)"
 
-    foreach ($f in $DocFiles) {
-        Get-InstallFile "src/docs/$f" (Join-Path $DocsDir $f)
-    }
+    # Help docs (always)
+    Get-InstallFile "src/docs/functionmap-help.md" (Join-Path $DocsDir "functionmap-help.md")
     Write-Ok "Help documentation installed (1 file)"
+
+    # MCP doc + server (conditional)
+    if ($script:InstallMcp -eq "yes") {
+        Get-InstallFile "src/docs/functionmap-mcp.md" (Join-Path $DocsDir "functionmap-mcp.md")
+        Write-Ok "MCP documentation installed (1 file)"
+
+        foreach ($f in $McpFiles) {
+            Get-InstallFile "src/mcp/$f" (Join-Path $McpDir $f)
+        }
+        Write-Ok "MCP server installed (4 files)"
+    }
 }
 
 # ============================================================================
@@ -424,6 +512,70 @@ function Update-ClaudeMd {
 }
 
 # ============================================================================
+#  MCP server registration in .claude.json
+# ============================================================================
+
+function Unregister-Mcp {
+    if (Test-Path $ClaudeJson) {
+        try {
+            $jsonContent = Get-Content $ClaudeJson -Raw | ConvertFrom-Json
+            if ($jsonContent.mcpServers -and $jsonContent.mcpServers.functionmap) {
+                $jsonContent.mcpServers.PSObject.Properties.Remove("functionmap")
+                $jsonContent | ConvertTo-Json -Depth 10 | Set-Content $ClaudeJson -Encoding UTF8
+                Write-Ok "MCP server deregistered from .claude.json"
+            }
+        } catch {
+            Write-Warn "Failed to update .claude.json: $_"
+        }
+    }
+}
+
+function Register-Mcp {
+    if ($script:InstallMcp -ne "yes") {
+        # Deregister and clean up MCP files from a previous install
+        Unregister-Mcp
+        if (Test-Path $McpDir) {
+            Remove-Item $McpDir -Recurse -Force
+            Write-Ok "Removed previous MCP server files"
+        }
+        $mcpDoc = Join-Path $DocsDir "functionmap-mcp.md"
+        if (Test-Path $mcpDoc) {
+            Remove-Item $mcpDoc -Force
+            Write-Ok "Removed MCP documentation"
+        }
+        return
+    }
+
+    $mcpServerPath = (Join-Path $McpDir "server.py").Replace('\', '/')
+
+    if (-not (Test-Path $ClaudeJson)) {
+        # Create new .claude.json
+        $data = @{ mcpServers = @{} }
+    } else {
+        $data = Get-Content $ClaudeJson -Raw | ConvertFrom-Json
+    }
+
+    # Ensure mcpServers object exists
+    if (-not $data.mcpServers) {
+        $data | Add-Member -Type NoteProperty -Name mcpServers -Value ([PSCustomObject]@{})
+    }
+
+    if (-not $data.mcpServers.functionmap) {
+        $entry = [PSCustomObject]@{
+            type    = "stdio"
+            command = "python"
+            args    = @($mcpServerPath)
+            env     = [PSCustomObject]@{}
+        }
+        $data.mcpServers | Add-Member -Type NoteProperty -Name functionmap -Value $entry
+        $data | ConvertTo-Json -Depth 10 | Set-Content $ClaudeJson -Encoding UTF8
+        Write-Ok "MCP server registered in .claude.json"
+    } else {
+        Write-Ok "MCP server already registered in .claude.json"
+    }
+}
+
+# ============================================================================
 #  Post-install verification
 # ============================================================================
 
@@ -438,17 +590,28 @@ function Test-Installation {
         $errors++
     }
 
-    # Verify all expected files
+    # Build expected file list (9 core + 5 optional MCP)
     $expectedFiles = @(
         (Join-Path $ToolsDir "functionmap.py"),
         (Join-Path $ToolsDir "categorize.py"),
         (Join-Path $ToolsDir "quickmap.py"),
         (Join-Path $ToolsDir "thirdparty.py"),
         (Join-Path $ToolsDir "describe.py"),
+        (Join-Path $ToolsDir "build-callgraph.cjs"),
         (Join-Path $CommandsDir "functionmap.md"),
         (Join-Path $CommandsDir "functionmap-update.md"),
         (Join-Path $DocsDir "functionmap-help.md")
     )
+    if ($script:InstallMcp -eq "yes") {
+        $expectedFiles += @(
+            (Join-Path $DocsDir "functionmap-mcp.md"),
+            (Join-Path $McpDir "server.py"),
+            (Join-Path $McpDir "index.py"),
+            (Join-Path $McpDir "search.py"),
+            (Join-Path $McpDir "requirements.txt")
+        )
+    }
+
     foreach ($f in $expectedFiles) {
         if (-not (Test-Path $f)) {
             Write-Warn "Missing: $f"
@@ -472,8 +635,9 @@ function Test-Installation {
         $errors++
     }
 
+    $fileCount = $expectedFiles.Count
     if ($errors -eq 0) {
-        Write-Ok "All 8 files verified"
+        Write-Ok "All $fileCount files verified"
         Write-Ok "CLAUDE.md sentinels verified"
     } else {
         Write-Warn "$errors verification issue(s) found"
@@ -491,10 +655,18 @@ function Show-Success {
     $version = if (Test-Path $versionFile) { Get-Content $versionFile -Raw } else { "unknown" }
     $version = $version.Trim()
 
+    if ($script:InstallMcp -eq "yes") {
+        $mcpStatus = "Included (registered in .claude.json)"
+    } else {
+        $mcpStatus = "Not installed (using MD-file discovery)"
+    }
+
     Write-Host ""
     Write-Host "  ============================================================"
     Write-Host "    FUNCTIONMAP v$version INSTALLED SUCCESSFULLY"
     Write-Host "  ============================================================"
+    Write-Host ""
+    Write-Host "    MCP server: $mcpStatus"
     Write-Host ""
     Write-Host "    Usage (in Claude Code):"
     Write-Host "      /functionmap          Full index of a project"
@@ -516,6 +688,7 @@ Show-Banner
 Test-Preflight
 Get-SourceMode
 Confirm-Install
+Get-McpChoice
 Backup-Existing
 
 try {
@@ -523,6 +696,7 @@ try {
     Install-Files
     Write-VersionFile
     Update-ClaudeMd
+    Register-Mcp
     $null = Test-Installation
     Show-Success
     if ($script:BackupDir) {

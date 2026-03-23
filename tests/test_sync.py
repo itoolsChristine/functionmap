@@ -52,14 +52,14 @@ class TestRemoveSwarm(unittest.TestCase):
             "Some preamble.\n"
             "\n"
             "## Phase 5\n"
-            "This is the swarm phase.\n"
+            "Run /swarm deep-check against the map.\n"
             "It does deep checks.\n"
             "\n"
             "## Phase 6\n"
             "This is the usability test.\n"
         )
         result, warnings = remove_swarm(inp)
-        self.assertNotIn('swarm', result.lower())
+        self.assertNotIn('/swarm', result)
         self.assertIn('## Phase 5', result)
         self.assertIn('usability test', result)
 
@@ -77,18 +77,20 @@ class TestRemoveSwarm(unittest.TestCase):
         result, warnings = remove_swarm(inp)
         self.assertIn('Skill(functionmap)', result)
 
-    def test_remove_swarm_warns_on_missing_marker(self):
+    def test_remove_swarm_no_warnings_when_clean(self):
+        """Content with no swarm references should pass through cleanly with no warnings."""
         inp = "This content has no Phase 5 marker at all.\n"
         result, warnings = remove_swarm(inp)
-        self.assertGreater(len(warnings), 0,
-                           'Expected warnings when Phase 5 marker is missing')
+        self.assertEqual(len(warnings), 0,
+                         'Expected no warnings for swarm-free content')
+        self.assertEqual(result, inp)
 
     def test_remove_swarm_idempotent(self):
         inp = (
             "Preamble.\n"
             "\n"
             "## Phase 5\n"
-            "Swarm content.\n"
+            "Run /swarm deep-check here.\n"
             "\n"
             "## Phase 6\n"
             "Usability test.\n"

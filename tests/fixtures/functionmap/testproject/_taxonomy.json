@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "project": "testproject",
+  "project_version": "1.0",
+  "root_path": "D:/_Source/testproject",
+  "generated_at": "2026-03-20T10:00:00",
+  "categories": {
+    "database-operations": {
+      "description": "Database CRUD operations and query building, including escaping and parameterization.",
+      "usage_examples": [
+        {
+          "title": "Select with parameters",
+          "code": "$rows = DB::select('users', ['active' => 1], 'name ASC');",
+          "language": "php",
+          "notes": "Returns array of matching rows."
+        }
+      ],
+      "subcategories": {}
+    },
+    "string-utilities": {
+      "description": "String formatting, transformation, and display helpers for both PHP and JavaScript.",
+      "usage_examples": [
+        {
+          "title": "Format currency",
+          "code": "$price = formatCurrency(29.99, 'USD');",
+          "language": "php",
+          "notes": "Returns '$29.99'."
+        }
+      ],
+      "subcategories": {}
+    }
+  },
+  "routing_rules": {
+    "third_party": [],
+    "deprecated": [],
+    "namespace_routes": [],
+    "directory_routes": [],
+    "file_routes": [
+      {
+        "file": "src/Database/DB.php",
+        "category": "database-operations"
+      },
+      {
+        "file": "src/Helpers/strings.php",
+        "category": "string-utilities"
+      },
+      {
+        "file": "assets/js/utils.js",
+        "category": "string-utilities"
+      }
+    ],
+    "keyword_routes": []
+  }
+}

@@ -26,7 +26,7 @@ Produces:
 
 Usage:
     python categorize.py                          # Process latest project
-    python categorize.py --project cmsb-3-82      # Process specific project
+    python categorize.py --project my-project      # Process specific project
 """
 
 import json
@@ -90,6 +90,86 @@ def load_taxonomy(project_dir: Path) -> dict:
         taxonomy["routing_rules"] = {}
 
     return taxonomy
+
+
+# =============================================================================
+# Enrichment loading (optional sidecar data)
+# =============================================================================
+
+def load_enrichment(project_dir: Path) -> dict:
+    """Load optional _enrichment.json sidecar file for supplementary metadata.
+
+    Enrichment files provide display names, descriptions, category hints, and
+    other metadata that wasn't extractable from source code analysis. Any
+    project can provide one -- it's fully optional.
+
+    Returns the parsed enrichment dict, or {} if missing/invalid.
+    """
+    enrichment_path = project_dir / "_enrichment.json"
+    if not enrichment_path.exists():
+        return {}
+
+    try:
+        with open(enrichment_path, "r", encoding="utf-8") as f:
+            enrichment = json.load(f)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[categorize] WARNING: _enrichment.json invalid JSON: {e}")
+        return {}
+
+    if enrichment.get("version") != 1:
+        print(f"[categorize] WARNING: _enrichment.json unsupported version "
+              f"(expected 1, got {enrichment.get('version')})")
+        return {}
+
+    if not isinstance(enrichment.get("entries"), dict):
+        print(f"[categorize] WARNING: _enrichment.json missing or invalid 'entries' field")
+        return {}
+
+    return enrichment
+
+
+def build_enrichment_index(enrichment: dict, functions: list) -> dict:
+    """Build O(1) lookup from function ID to enrichment entry.
+
+    Supports three key_format modes:
+      - file:name:line  -- composite key (most precise, for normal projects)
+      - name_only       -- keyed by short_name (for decompiled code with unique names)
+      - custom          -- keyed by arbitrary match_field/match_value per entry
+
+    Returns dict keyed by "file::short_name::line_start" -> enrichment entry.
+    """
+    if not enrichment or not enrichment.get("entries"):
+        return {}
+
+    entries    = enrichment["entries"]
+    key_format = enrichment.get("key_format", "file:name:line")
+    index      = {}
+
+    if key_format == "name_only":
+        # Build reverse lookup: short_name -> enrichment entry
+        for fn in functions:
+            name = fn.get("short_name", "")
+            if name in entries:
+                fn_key = f"{fn['file']}::{fn['short_name']}::{fn['line_start']}"
+                index[fn_key] = entries[name]
+
+    elif key_format == "custom":
+        # Each entry specifies its own match_field and match_value
+        for entry_key, entry_data in entries.items():
+            match_field = entry_data.get("match_field", "short_name")
+            match_value = entry_data.get("match_value", entry_key)
+            for fn in functions:
+                if fn.get(match_field) == match_value:
+                    fn_key = f"{fn['file']}::{fn['short_name']}::{fn['line_start']}"
+                    index[fn_key] = entry_data
+
+    else:  # file:name:line (default)
+        for fn in functions:
+            fn_key = f"{fn['file']}::{fn['short_name']}::{fn['line_start']}"
+            if fn_key in entries:
+                index[fn_key] = entries[fn_key]
+
+    return index
 
 
 def _minimal_taxonomy() -> dict:
@@ -169,7 +249,9 @@ def is_third_party(fn: dict, taxonomy: dict) -> bool:
     return False
 
 
-def categorize_function(fn: dict, taxonomy: dict) -> Tuple[str, str]:
+def categorize_function(
+    fn: dict, taxonomy: dict, enrichment_entry: Optional[dict] = None
+) -> Tuple[str, str]:
     """
     Categorize a function using routing rules from taxonomy config.
 
@@ -182,6 +264,8 @@ def categorize_function(fn: dict, taxonomy: dict) -> Tuple[str, str]:
       4. Directory routes (path prefix matching)
       5. File routes (exact file matching)
       6. Keyword routes (function name matching)
+      6.5. Fallback file routing
+      6.7. Enrichment category_hint (for otherwise-uncategorized functions)
       7. Uncategorized fallback
     """
     fp = fn["file"].replace("\\", "/")
@@ -259,6 +343,12 @@ def categorize_function(fn: dict, taxonomy: dict) -> Tuple[str, str]:
             cat = route["category"]
             sub = route.get("subcategory", "core")
             return (cat, sub)
+
+    # --- Rule 6.7: Enrichment category_hint (for otherwise-uncategorized functions) ---
+    if enrichment_entry:
+        hint = enrichment_entry.get("category_hint")
+        if hint and hint in taxonomy.get("categories", {}):
+            return (hint, "enriched")
 
     # --- Rule 7: Uncategorized fallback ---
     return ("uncategorized", "other")
@@ -537,7 +627,8 @@ def _format_subcategory_title(sub_name: str) -> str:
 
 
 def generate_category_markdown(
-    top_cat: str, sub_name: str, funcs: List[dict], taxonomy: dict
+    top_cat: str, sub_name: str, funcs: List[dict], taxonomy: dict,
+    enrichment_index: Optional[dict] = None,
 ) -> str:
     """Generate markdown content for a category file."""
     cat_key = f"{top_cat}/{sub_name}"
@@ -595,6 +686,10 @@ def generate_category_markdown(
     funcs.sort(key=lambda f: f["short_name"].lower())
 
     for func in funcs:
+        # Look up enrichment data for this function
+        fn_key = f"{func['file']}::{func['short_name']}::{func['line_start']}"
+        enrich = enrichment_index.get(fn_key, {}) if enrichment_index else {}
+
         vis = f"{func['visibility']} " if func.get("visibility") else ""
         static = "static " if func.get("is_static") else ""
         async_m = "async " if func.get("is_async") else ""
@@ -603,10 +698,17 @@ def generate_category_markdown(
         if func.get("return_type") and func["return_type"] != "unknown":
             sig += f": {func['return_type']}"
 
-        lines.append(f"## {func['short_name']}")
+        # Heading: use displayName if enrichment provides one
+        if enrich.get("displayName"):
+            lines.append(f"## {enrich['displayName']} ({func['short_name']})")
+        else:
+            lines.append(f"## {func['short_name']}")
         lines.append("")
 
+        # Description: prefer docblock, fall back to enrichment
         desc = extract_function_description(func)
+        if not desc and enrich.get("description"):
+            desc = enrich["description"]
         if desc:
             lines.append(desc)
             lines.append("")
@@ -617,7 +719,7 @@ def generate_category_markdown(
         # Note about variant-preserving return types
         rtype = func.get("return_type", "")
         if rtype in ("static", "self", "$this"):
-            lines.append("*Returns the same variant type as the caller (e.g., SmartArrayHtml returns SmartArrayHtml).*")
+            lines.append("*Returns the same variant type as the caller (preserves subclass type).*")
             lines.append("")
 
         loc = f"{func['file']}:{func['line_start']}"
@@ -638,6 +740,24 @@ def generate_category_markdown(
             lines.append(f"**Attributes:** `{attrs}`")
             lines.append("")
 
+        # Enrichment metadata
+        if enrich.get("library"):
+            lines.append(f"**Library:** {enrich['library']}")
+            lines.append("")
+
+        if enrich.get("confidence") and enrich["confidence"] != "confident":
+            lines.append(f"**Confidence:** {enrich['confidence']}")
+            lines.append("")
+
+        if enrich.get("tags"):
+            tag_str = ", ".join(f"`{t}`" for t in enrich["tags"])
+            lines.append(f"**Tags:** {tag_str}")
+            lines.append("")
+
+        if enrich.get("notes"):
+            lines.append(f"*{enrich['notes']}*")
+            lines.append("")
+
         lines.append("---")
         lines.append("")
 
@@ -649,6 +769,7 @@ def generate_index(
     project_name: str,
     third_party_count: int,
     taxonomy: dict,
+    enrichment: Optional[dict] = None,
 ) -> str:
     """Generate hierarchical project index markdown."""
     total_funcs = sum(
@@ -665,8 +786,12 @@ def generate_index(
     ]
     if third_party_count > 0:
         lines[-1] += f" (excludes {third_party_count} bundled third-party functions)"
+    lines.append(f"**Categories:** {len(categories)} top-level, {total_subcats} subcategories")
+    if enrichment and enrichment.get("entries"):
+        entry_count = len(enrichment["entries"])
+        source = enrichment.get("source", "unknown")
+        lines.append(f"**Enrichment:** {entry_count} entries from {source}")
     lines.extend([
-        f"**Categories:** {len(categories)} top-level, {total_subcats} subcategories",
         "",
         "---",
         "",
@@ -826,6 +951,17 @@ def main():
 
     print(f"[categorize] Total functions: {len(all_functions)}")
 
+    # Load enrichment (optional sidecar data)
+    enrichment = load_enrichment(project_dir)
+    enrichment_index = {}
+    if enrichment:
+        enrichment_index = build_enrichment_index(enrichment, all_functions)
+        matched = len(enrichment_index)
+        total_entries = len(enrichment.get("entries", {}))
+        source = enrichment.get("source", "unknown")
+        print(f"[categorize] Enrichment: {total_entries} entries, "
+              f"{matched} matched to functions (source: {source})")
+
     # Separate third-party from first-party (Rule 1)
     third_party = [fn for fn in all_functions if is_third_party(fn, taxonomy)]
     first_party = [fn for fn in all_functions if not is_third_party(fn, taxonomy)]
@@ -872,7 +1008,9 @@ def main():
     raw_categories: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
 
     for fn in first_party:
-        top_cat, sub_cat = categorize_function(fn, taxonomy)
+        fn_key = f"{fn['file']}::{fn['short_name']}::{fn['line_start']}"
+        enrich_entry = enrichment_index.get(fn_key)
+        top_cat, sub_cat = categorize_function(fn, taxonomy, enrichment_entry=enrich_entry)
         raw_categories[top_cat][sub_cat].append(fn)
 
     top_count = len(raw_categories)
@@ -910,7 +1048,10 @@ def main():
     file_count = 0
     for top_cat, subcats in sorted(categories.items()):
         for sub_name, funcs in sorted(subcats.items()):
-            md_content = generate_category_markdown(top_cat, sub_name, funcs, taxonomy)
+            md_content = generate_category_markdown(
+                top_cat, sub_name, funcs, taxonomy,
+                enrichment_index=enrichment_index,
+            )
             filename = f"{top_cat}--{sub_name}.md"
             md_path = project_dir / filename
             md_path.write_text(md_content, encoding="utf-8")
@@ -932,7 +1073,10 @@ def main():
 
     # Generate index
     print("[categorize] Generating index...")
-    index_content = generate_index(categories, project_name, len(third_party), taxonomy)
+    index_content = generate_index(
+        categories, project_name, len(third_party), taxonomy,
+        enrichment=enrichment,
+    )
 
     # Append third-party library table if any were mapped
     if _has_thirdparty:
@@ -973,6 +1117,15 @@ def main():
             status = info.get("status", "mapped")
             note = f" (needs docs)" if status == "needs_docs" else ""
             print(f"[categorize]   {key}: {info.get('function_count', 0)} functions{note}")
+    if enrichment:
+        enriched_routed = sum(
+            1 for subcats in categories.values()
+            for sub_name, funcs in subcats.items()
+            if sub_name == "enriched" for _ in funcs
+        )
+        print(f"[categorize] Enrichment source: {enrichment.get('source', 'unknown')}")
+        if enriched_routed:
+            print(f"[categorize] Enrichment rescued from uncategorized: {enriched_routed}")
     print(f"[categorize] Index: ~/.claude/functionmap/{project_name}.md")
 
 

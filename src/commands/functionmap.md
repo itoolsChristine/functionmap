@@ -200,6 +200,47 @@ Skip to Phase 2 after running the extraction command above. All Phase 2/3/4 inst
 
 ---
 
+## Enrichment files (optional)
+
+Projects can optionally provide an `_enrichment.json` file alongside `_functions.json` in their functionmap directory. This file provides supplementary metadata that wasn't extractable from source code analysis -- human annotations, AI-generated descriptions, naming data from decompilation, etc.
+
+Enrichment files are loaded automatically by `categorize.py` during Phase 3. No special flags are needed. If no `_enrichment.json` exists, categorization proceeds as normal.
+
+**Schema:**
+```json
+{
+  "version": 1,
+  "source": "description of where the data came from",
+  "key_format": "file:name:line | name_only | custom",
+  "entries": {
+    "function_key": {
+      "displayName": "Human Readable Name",
+      "description": "What this function does",
+      "category_hint": "suggested-category",
+      "library": "library-name or null",
+      "confidence": "confident | tentative | unknown",
+      "tags": ["ai-analyzed", "third-party"],
+      "notes": "additional context"
+    }
+  }
+}
+```
+
+**Key format modes:**
+- `file:name:line` -- keys are `file::short_name::line_start` (most precise, for normal projects)
+- `name_only` -- keys are `short_name` alone (for decompiled code where function names are unique)
+- `custom` -- each entry has `match_field` and `match_value` for arbitrary matching
+
+**What enrichment does:**
+- `displayName` overrides the function heading in markdown (original name shown in parentheses)
+- `description` supplements or overrides docblock descriptions
+- `category_hint` routes otherwise-uncategorized functions to the hinted category (only if the category exists in taxonomy)
+- `library`, `confidence`, `tags`, `notes` appear as metadata in the function entry
+
+All entry fields are optional. Sub-projects can have their own `_enrichment.json` independent of the parent.
+
+---
+
 ## Phase 1 — Function extraction (authoritative output)
 
 ### Step 1.1: Pre-flight checks
@@ -291,6 +332,33 @@ python "$HOME/.claude/tools/functionmap/functionmap.py" --diff {project}
 
 Print the diff summary to chat. This helps the user understand whether the remap was worthwhile and what changed in their codebase since the last map.
 
+### Step 1.5: Build call graph and content anchors
+
+After extraction, build the inter-function call graph and extract content anchors for change tracking:
+
+```bash
+node "$HOME/.claude/tools/functionmap/build-callgraph.cjs" {project}
+```
+
+This produces `{project}/_callgraph.json` containing:
+- **Call edges**: which functions call which other functions (regex-based, ~80% accuracy)
+- **Content anchors**: distinctive string literals per function (for tracking functions across refactors)
+- **Orphan detection**: functions never called by anything (potential dead code)
+
+The call graph improves taxonomy design (Phase 2) because:
+- Functions that call each other should be in the same category
+- Functions called by many others are likely utilities/helpers
+- Orphaned functions may indicate dead code or entry points
+
+**Using the call graph in taxonomy design (Phase 2):**
+When analyzing the project for categories, consult `_callgraph.json` stats:
+- Functions with many callers (`calledBy.length > 5`) are shared utilities
+- Tight call clusters (group of functions that only call each other) form natural categories
+- If keyword routing puts a function in "error-handling" but its callers are all in "auth", it probably belongs in "auth"
+
+**Content anchors for `/functionmap-update`:**
+When a function moves between files (refactor), `_callgraph.json` anchors help `quickmap.py` recognize it as a move rather than a deletion + addition. The anchor is a distinctive string literal that uniquely identifies the function regardless of its file location.
+
 ---
 
 ## Phase 2 — Taxonomy design (Claude-driven, project-specific)
@@ -306,12 +374,22 @@ Read the project structure to understand what categories make sense:
    python "$HOME/.claude/tools/functionmap/functionmap.py" --analyze {project}
    ```
 
-2. **Scan project directory tree** -- use Glob/Bash to see the overall structure:
+2. **Read call graph stats** (if `_callgraph.json` exists):
+   ```bash
+   node -e "const cg=JSON.parse(require('fs').readFileSync(require('os').homedir()+'/.claude/functionmap/{project}/_callgraph.json','utf8'));console.log(JSON.stringify(cg.stats,null,2))"
+   ```
+   Use the call graph to identify:
+   - **Natural clusters**: Groups of functions that call each other heavily
+   - **Shared utilities**: Functions with many callers (calledBy > 5)
+   - **Entry points**: Functions with callers but no calls (leaf functions with external callers)
+   - **Orphans**: Functions with 0 calls and 0 calledBy (potential dead code or standalone utilities)
+
+3. **Scan project directory tree** -- use Glob/Bash to see the overall structure:
    ```bash
    ls -la "{scan_root}"
    ```
 
-3. **Look for project-specific patterns:**
+4. **Look for project-specific patterns:**
    - Plugin/module system? (e.g., `plugins/`, `modules/`, `packages/`)
    - Third-party bundled code? (e.g., `vendor/`, `node_modules/`, specific library dirs)
    - Test directories? (usually excluded from function maps)
@@ -519,10 +597,11 @@ After categorize.py finishes, you (Claude) should:
    - Remove the stale example entirely
    Stale examples that reference non-existent functions are actively misleading -- worse than no examples.
 
-2. **Enrich project index descriptions:**
+2. **Enrich project index descriptions (use call graph if available):**
    After categorization, you know exactly what's in each category. Update each category's description in the project index (`{project}.md`) to include:
    - The most important/commonly-used function names (top 3-5 by likely usage)
    - Specific guidance on when to load this category ("Load this when working with file uploads, media thumbnails, or download handlers")
+   - **If `_callgraph.json` exists**: Include key call relationships. For example: "Entry point: `handleUpload()` which calls `validateMime()`, `resizeImage()`, `storeFile()`". This shows the flow through the category, not just a flat list.
    The goal: a developer reading ONLY the project index should be able to identify the right category without opening individual category files. Generic descriptions like "Database functions" should become "Query building (DB::select, DB::insert, DB::update), connection management, result hydration. Load when writing or modifying database queries."
 
 3. **Generate `libraries.md`** with dependency links:

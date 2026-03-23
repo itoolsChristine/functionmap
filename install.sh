@@ -13,12 +13,33 @@ TOOLS_DIR="$CLAUDE_DIR/tools/functionmap"
 COMMANDS_DIR="$CLAUDE_DIR/commands"
 DOCS_DIR="$CLAUDE_DIR/docs"
 MAPS_DIR="$CLAUDE_DIR/functionmap"
+MCP_DIR="$CLAUDE_DIR/functionmap-mcp"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+CLAUDE_JSON="$HOME/.claude.json"
 
 # Files to install  (source-relative-path : destination)
-TOOL_FILES="functionmap.py categorize.py quickmap.py thirdparty.py describe.py"
+TOOL_FILES="functionmap.py categorize.py quickmap.py thirdparty.py describe.py build-callgraph.cjs"
 COMMAND_FILES="functionmap.md functionmap-update.md"
-DOC_FILES="functionmap-help.md"
+DOC_FILES="functionmap-help.md functionmap-mcp.md"
+MCP_FILES="server.py index.py search.py requirements.txt"
+
+# ============================================================================
+#  CLI flag parsing
+# ============================================================================
+
+INSTALL_MCP=""   # "" = undecided, "yes" = include MCP, "no" = skip MCP
+
+for arg in "$@"; do
+    case "$arg" in
+        --mcp)    INSTALL_MCP="yes" ;;
+        --no-mcp) INSTALL_MCP="no" ;;
+        *)
+            echo "  [ERROR] Unknown option: $arg" >&2
+            echo "  Usage: install.sh [--mcp | --no-mcp]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # ============================================================================
 #  Banner
@@ -136,16 +157,18 @@ confirm_install() {
     local existing_tools=false
     local existing_cmds=false
     local existing_docs=false
+    local existing_mcp=false
     local existing_claude_md=false
     local existing_maps=false
 
     for f in $TOOL_FILES; do [ -f "$TOOLS_DIR/$f" ] && existing_tools=true && break; done
     for f in $COMMAND_FILES; do [ -f "$COMMANDS_DIR/$f" ] && existing_cmds=true && break; done
     for f in $DOC_FILES; do [ -f "$DOCS_DIR/$f" ] && existing_docs=true && break; done
+    for f in $MCP_FILES; do [ -f "$MCP_DIR/$f" ] && existing_mcp=true && break; done
     [ -f "$CLAUDE_MD" ] && existing_claude_md=true
     [ -d "$MAPS_DIR" ] && [ "$(ls -A "$MAPS_DIR" 2>/dev/null)" ] && existing_maps=true
 
-    if $existing_tools || $existing_cmds || $existing_docs; then
+    if $existing_tools || $existing_cmds || $existing_docs || $existing_mcp; then
         IS_UPGRADE=true
     fi
 
@@ -162,6 +185,7 @@ confirm_install() {
     if $existing_tools; then echo "    - Python tools ($TOOLS_DIR)"; fi
     if $existing_cmds;  then echo "    - Skill commands (functionmap.md, functionmap-update.md)"; fi
     if $existing_docs;  then echo "    - Help documentation (functionmap-help.md)"; fi
+    if $existing_mcp;   then echo "    - MCP server ($MCP_DIR)"; fi
     if $existing_claude_md; then echo "    - CLAUDE.md (sentinel blocks will be updated, not replaced)"; fi
     if $existing_maps;  then echo "    - Generated function maps ($MAPS_DIR)"; fi
     if ! $existing_tools && ! $existing_cmds && ! $existing_docs && ! $existing_claude_md && ! $existing_maps; then
@@ -206,6 +230,7 @@ backup_existing() {
     for f in $TOOL_FILES; do [ -f "$TOOLS_DIR/$f" ] && has_existing=true && break; done
     for f in $COMMAND_FILES; do [ -f "$COMMANDS_DIR/$f" ] && has_existing=true && break; done
     for f in $DOC_FILES; do [ -f "$DOCS_DIR/$f" ] && has_existing=true && break; done
+    for f in $MCP_FILES; do [ -f "$MCP_DIR/$f" ] && has_existing=true && break; done
     [ -f "$CLAUDE_MD" ] && has_existing=true
 
     if ! $has_existing; then
@@ -214,7 +239,7 @@ backup_existing() {
     fi
 
     BACKUP_DIR="$CLAUDE_DIR/.functionmap-backup-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$BACKUP_DIR/tools" "$BACKUP_DIR/commands" "$BACKUP_DIR/docs"
+    mkdir -p "$BACKUP_DIR/tools" "$BACKUP_DIR/commands" "$BACKUP_DIR/docs" "$BACKUP_DIR/mcp"
 
     # Back up Python tools
     for f in $TOOL_FILES; do
@@ -230,6 +255,11 @@ backup_existing() {
     # Back up docs
     for f in $DOC_FILES; do
         [ -f "$DOCS_DIR/$f" ] && cp "$DOCS_DIR/$f" "$BACKUP_DIR/docs/$f"
+    done
+
+    # Back up MCP server
+    for f in $MCP_FILES; do
+        [ -f "$MCP_DIR/$f" ] && cp "$MCP_DIR/$f" "$BACKUP_DIR/mcp/$f"
     done
 
     # Back up CLAUDE.md
@@ -268,11 +298,62 @@ on_failure() {
 }
 
 # ============================================================================
+#  MCP choice
+# ============================================================================
+
+ask_mcp() {
+    # Already decided via CLI flag
+    if [ "$INSTALL_MCP" = "yes" ] || [ "$INSTALL_MCP" = "no" ]; then
+        if [ "$INSTALL_MCP" = "yes" ]; then
+            info "MCP server: included (--mcp flag)"
+        else
+            info "MCP server: excluded (--no-mcp flag)"
+        fi
+        return
+    fi
+
+    local mcp_previously_installed=false
+    [ -f "$MCP_DIR/server.py" ] && mcp_previously_installed=true
+
+    echo ""
+    echo "  The MCP server lets Claude search function maps instantly."
+    echo "  Without it, Claude reads map files directly (still works, uses more context)."
+    echo ""
+
+    # Non-interactive: default yes
+    if ! [ -t 0 ]; then
+        INSTALL_MCP="yes"
+        info "Non-interactive mode: including MCP server"
+        return
+    fi
+
+    # Interactive prompt
+    if $IS_UPGRADE && ! $mcp_previously_installed; then
+        # Upgrade without existing MCP: default No (respects prior choice)
+        read -rp "  Include MCP server? [y/N] " answer
+        case "$answer" in
+            [yY]|[yY][eE][sS]) INSTALL_MCP="yes" ;;
+            *) INSTALL_MCP="no" ;;
+        esac
+    else
+        # Fresh install or MCP already present: default Yes
+        read -rp "  Include MCP server for faster lookups? (recommended) [Y/n] " answer
+        case "$answer" in
+            [nN]|[nN][oO]) INSTALL_MCP="no" ;;
+            *) INSTALL_MCP="yes" ;;
+        esac
+    fi
+}
+
+# ============================================================================
 #  Create directories
 # ============================================================================
 
 create_dirs() {
     mkdir -p "$TOOLS_DIR" "$COMMANDS_DIR" "$DOCS_DIR" "$MAPS_DIR"
+    if [ "$INSTALL_MCP" = "yes" ]; then
+        mkdir -p "$MCP_DIR"
+    fi
     ok "Directories created"
 }
 
@@ -285,7 +366,7 @@ install_files() {
     for f in $TOOL_FILES; do
         get_file "src/tools/$f" "$TOOLS_DIR/$f"
     done
-    ok "Python tools installed (5 files)"
+    ok "Tools installed (6 files)"
 
     # Skill commands
     for f in $COMMAND_FILES; do
@@ -293,11 +374,20 @@ install_files() {
     done
     ok "Skill commands installed (2 files)"
 
-    # Help docs
-    for f in $DOC_FILES; do
-        get_file "src/docs/$f" "$DOCS_DIR/$f"
-    done
+    # Help docs (always)
+    get_file "src/docs/functionmap-help.md" "$DOCS_DIR/functionmap-help.md"
     ok "Help documentation installed (1 file)"
+
+    # MCP doc + server (conditional)
+    if [ "$INSTALL_MCP" = "yes" ]; then
+        get_file "src/docs/functionmap-mcp.md" "$DOCS_DIR/functionmap-mcp.md"
+        ok "MCP documentation installed (1 file)"
+
+        for f in $MCP_FILES; do
+            get_file "src/mcp/$f" "$MCP_DIR/$f"
+        done
+        ok "MCP server installed (4 files)"
+    fi
 }
 
 # ============================================================================
@@ -445,6 +535,85 @@ inject_claude_md() {
 }
 
 # ============================================================================
+#  MCP server registration in .claude.json
+# ============================================================================
+
+deregister_mcp() {
+    # Deregister from .claude.json
+    if [ -f "$CLAUDE_JSON" ]; then
+        $PYTHON - "$CLAUDE_JSON" << 'PYEOF' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    if 'functionmap' in data.get('mcpServers', {}):
+        del data['mcpServers']['functionmap']
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+        print('deregistered')
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+PYEOF
+    fi
+}
+
+register_mcp() {
+    if [ "$INSTALL_MCP" != "yes" ]; then
+        # Deregister and clean up MCP files from a previous install
+        deregister_mcp && ok "MCP server deregistered from .claude.json" || true
+        if [ -d "$MCP_DIR" ]; then
+            rm -rf "$MCP_DIR"
+            ok "Removed previous MCP server files"
+        fi
+        if [ -f "$DOCS_DIR/functionmap-mcp.md" ]; then
+            rm -f "$DOCS_DIR/functionmap-mcp.md"
+            ok "Removed MCP documentation"
+        fi
+        return
+    fi
+
+    local mcp_server_path
+    mcp_server_path="$(cd "$MCP_DIR" && pwd)/server.py"
+
+    # Use Python to safely manipulate JSON (pass resolved paths as args)
+    $PYTHON - "$CLAUDE_JSON" "$mcp_server_path" << 'PYEOF'
+import json, sys
+
+claude_json = sys.argv[1]
+server_path = sys.argv[2]
+
+data = {}
+try:
+    with open(claude_json, 'r') as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+
+servers = data.setdefault('mcpServers', {})
+if 'functionmap' not in servers:
+    servers['functionmap'] = {
+        'type': 'stdio',
+        'command': 'python',
+        'args': [server_path],
+        'env': {}
+    }
+    with open(claude_json, 'w') as f:
+        json.dump(data, f, indent=2)
+    print('registered')
+else:
+    print('already-registered')
+PYEOF
+
+    local result=$?
+    if [ $result -eq 0 ]; then
+        ok "MCP server registered in .claude.json"
+    else
+        warn "Failed to register MCP server in .claude.json"
+    fi
+}
+
+# ============================================================================
 #  Post-install verification
 # ============================================================================
 
@@ -457,17 +626,28 @@ verify() {
         errors=$((errors + 1))
     fi
 
-    # Verify all expected files exist
+    # Build expected file list (9 core + 5 optional MCP)
     local expected_files=(
         "$TOOLS_DIR/functionmap.py"
         "$TOOLS_DIR/categorize.py"
         "$TOOLS_DIR/quickmap.py"
         "$TOOLS_DIR/thirdparty.py"
         "$TOOLS_DIR/describe.py"
+        "$TOOLS_DIR/build-callgraph.cjs"
         "$COMMANDS_DIR/functionmap.md"
         "$COMMANDS_DIR/functionmap-update.md"
         "$DOCS_DIR/functionmap-help.md"
     )
+    if [ "$INSTALL_MCP" = "yes" ]; then
+        expected_files+=(
+            "$DOCS_DIR/functionmap-mcp.md"
+            "$MCP_DIR/server.py"
+            "$MCP_DIR/index.py"
+            "$MCP_DIR/search.py"
+            "$MCP_DIR/requirements.txt"
+        )
+    fi
+
     for f in "${expected_files[@]}"; do
         if [ ! -f "$f" ]; then
             warn "Missing: $f"
@@ -490,8 +670,9 @@ verify() {
         errors=$((errors + 1))
     fi
 
+    local file_count=${#expected_files[@]}
     if [ $errors -eq 0 ]; then
-        ok "All 8 files verified"
+        ok "All $file_count files verified"
         ok "CLAUDE.md sentinels verified"
     else
         warn "$errors verification issue(s) found"
@@ -508,10 +689,19 @@ success_message() {
     local version
     version=$(cat "$TOOLS_DIR/.version" 2>/dev/null || echo "unknown")
 
+    local mcp_status
+    if [ "$INSTALL_MCP" = "yes" ]; then
+        mcp_status="Included (registered in .claude.json)"
+    else
+        mcp_status="Not installed (using MD-file discovery)"
+    fi
+
     echo ""
     echo "  ============================================================"
     echo "    FUNCTIONMAP v$version INSTALLED SUCCESSFULLY"
     echo "  ============================================================"
+    echo ""
+    echo "    MCP server: $mcp_status"
     echo ""
     echo "    Usage (in Claude Code):"
     echo "      /functionmap          Full index of a project"
@@ -534,12 +724,14 @@ main() {
     preflight
     detect_source
     confirm_install
+    ask_mcp
     backup_existing
     trap on_failure ERR
     create_dirs
     install_files
     write_version
     inject_claude_md
+    register_mcp
     trap - ERR
     verify || true
     success_message

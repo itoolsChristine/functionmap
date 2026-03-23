@@ -10,7 +10,7 @@ Output: _functions.json with raw function data (no categories)
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import argparse
 import datetime as _dt
@@ -125,6 +125,34 @@ def _posix_rel(path: Path, root: Path) -> str:
 def _posix_path(p) -> str:
     """Convert a path to forward-slash format for JSON serialization."""
     return str(p).replace('\\', '/')
+
+
+def resolve_root_path_glob(sub_config: dict, project_root: str) -> Optional[str]:
+    """Resolve a stale sub-project root_path using root_path_glob.
+
+    When a sub-project's root_path no longer exists (common after version
+    upgrades), this checks for a root_path_glob field and resolves it
+    relative to the project root. Takes the last match (latest by sort).
+
+    Returns the resolved path string, or None if resolution fails.
+    """
+    glob_pattern = sub_config.get("root_path_glob")
+    if not glob_pattern:
+        return None
+
+    import glob as _glob_module
+    base = Path(project_root)
+    full_pattern = str(base / glob_pattern)
+    matches = sorted(_glob_module.glob(full_pattern))
+
+    if not matches:
+        return None
+
+    resolved = Path(matches[-1])
+    if resolved.exists() and resolved.is_dir():
+        return _posix_path(resolved)
+
+    return None
 
 
 def _file_hash(path: Path) -> str:
