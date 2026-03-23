@@ -5,9 +5,16 @@ Copies Python tools verbatim and applies transforms to .md skill/doc files:
 - Path normalization (Windows-specific paths -> $HOME/.claude/)
 - /swarm removal (functionmap.md only)
 
+Also handles version management:
+- Reads VERSION file as single source of truth
+- Auto-bumps patch (Z) when synced files have actual changes
+- Propagates version to __version__, README badge, CHANGELOG header
+
 Usage:
-    python sync.py              # Full sync
+    python sync.py              # Full sync (auto-bumps patch if changes detected)
     python sync.py --dry-run    # Show what would change without writing
+    python sync.py --minor      # Bump minor version (Y), reset patch
+    python sync.py --major      # Bump major version (X), reset minor + patch
 """
 from __future__ import annotations
 
@@ -32,6 +39,10 @@ PYTHON_TOOLS = [
     ("tools/functionmap/quickmap.py",    "tools/quickmap.py"),
     ("tools/functionmap/thirdparty.py",  "tools/thirdparty.py"),
     ("tools/functionmap/describe.py",    "tools/describe.py"),
+]
+
+JS_TOOLS = [
+    ("tools/functionmap/build-callgraph.cjs", "tools/build-callgraph.cjs"),
 ]
 
 SKILL_FILES = [
@@ -90,6 +101,111 @@ def normalize_paths(content: str) -> str:
     result = re.sub(r'\$HOME/\.claude[\\\/][^\s"\'`\n]*', _fix_claude_backslashes, result)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Version management (VERSION file is the single source of truth)
+# ---------------------------------------------------------------------------
+
+VERSION_FILE = REPO_ROOT / "VERSION"
+
+
+def read_version() -> str:
+    """Read the current version from the VERSION file."""
+    if not VERSION_FILE.exists():
+        return "0.0.0"
+    return VERSION_FILE.read_text(encoding="utf-8").strip()
+
+
+def write_version(version: str) -> None:
+    """Write a version string to the VERSION file."""
+    VERSION_FILE.write_text(version + "\n", encoding="utf-8", newline="\n")
+
+
+def bump_version(version: str, part: str) -> str:
+    """Bump a semver version string by part ('major', 'minor', or 'patch').
+
+        bump_version("1.2.3", "patch") -> "1.2.4"
+        bump_version("1.2.3", "minor") -> "1.3.0"
+        bump_version("1.2.3", "major") -> "2.0.0"
+    """
+    parts = version.split(".")
+    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+
+    if part == "major":
+        major += 1
+        minor = 0
+        patch = 0
+    elif part == "minor":
+        minor += 1
+        patch = 0
+    else:
+        patch += 1
+
+    return f"{major}.{minor}.{patch}"
+
+
+def patch_py_version(file_path: Path, version: str, dry_run: bool = False) -> bool:
+    """Replace __version__ = "..." in a Python file. Returns True if changed.
+
+    Preserves the file's original line endings (CRLF or LF).
+    Reads via read_text() so \r\n is normalized to \n, then writes back
+    with the detected newline style.
+    """
+    raw = file_path.read_bytes()
+    newline = "\r\n" if b"\r\n" in raw[:2000] else "\n"
+
+    # read_text normalizes \r\n to \n -- safe for regex + write_text(newline=...)
+    content = file_path.read_text(encoding="utf-8")
+    new_content, count = re.subn(
+        r'(__version__\s*=\s*")[^"]*(")',
+        rf'\g<1>{version}\2',
+        content,
+        count=1,
+    )
+    if count == 0 or new_content == content:
+        return False
+    if not dry_run:
+        file_path.write_text(new_content, encoding="utf-8", newline=newline)
+    return True
+
+
+def patch_readme_badge(version: str, dry_run: bool = False) -> bool:
+    """Update the version badge in README.md. Returns True if changed."""
+    readme = REPO_ROOT / "README.md"
+    if not readme.exists():
+        return False
+    content = readme.read_text(encoding="utf-8")
+    new_content = re.sub(
+        r'!\[Version\]\(https://img\.shields\.io/badge/version-[^)]*\)',
+        f'![Version](https://img.shields.io/badge/version-{version}-blue)',
+        content,
+    )
+    if new_content == content:
+        return False
+    if not dry_run:
+        readme.write_text(new_content, encoding="utf-8", newline="\n")
+    return True
+
+
+def patch_changelog_header(version: str, dry_run: bool = False) -> bool:
+    """Update the latest ## [X.Y.Z] header in CHANGELOG.md. Returns True if changed."""
+    changelog = REPO_ROOT / "CHANGELOG.md"
+    if not changelog.exists():
+        return False
+    content = changelog.read_text(encoding="utf-8")
+    new_content, count = re.subn(
+        r'^(## \[)\d+\.\d+\.\d+(\])',
+        rf'\g<1>{version}\2',
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count == 0 or new_content == content:
+        return False
+    if not dry_run:
+        changelog.write_text(new_content, encoding="utf-8", newline="\n")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +271,15 @@ def remove_swarm(content: str) -> tuple[str, list[str]]:
     Returns:
         (transformed_content, list_of_warnings)
 
-    Each transform checks for its expected marker. If a marker is not found,
-    a warning is appended instead of silently producing a broken file.
+    If no swarm markers are found at all, swarm has already been removed from
+    the source -- return silently with no warnings. Only warn if some markers
+    are present but others are missing (partial/broken state).
     """
+    # Quick check: if no swarm indicators exist, it's already clean
+    has_any_swarm = bool(re.search(r'/swarm|swarm deep|Deep check \(swarm\)', content, re.IGNORECASE))
+    if not has_any_swarm:
+        return content, []
+
     result = content
     warnings = []
 
@@ -381,7 +503,7 @@ def sync_file(src: Path, dst: Path, transforms: list[str] | None = None,
         substitutions: Project-specific string replacements (loaded from substitutions.local.json)
 
     Returns:
-        dict with keys: src, dst, src_lines, dst_lines, warnings, skipped
+        dict with keys: src, dst, src_lines, dst_lines, warnings, skipped, changed
     """
     transforms = transforms or []
     stats = {
@@ -391,6 +513,7 @@ def sync_file(src: Path, dst: Path, transforms: list[str] | None = None,
         "dst_lines": 0,
         "warnings":  [],
         "skipped":   False,
+        "changed":   False,
     }
 
     if not src.exists():
@@ -413,6 +536,13 @@ def sync_file(src: Path, dst: Path, transforms: list[str] | None = None,
 
     stats["dst_lines"] = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
 
+    # Detect whether the file actually changed
+    if dst.exists():
+        existing = dst.read_text(encoding="utf-8")
+        stats["changed"] = (content != existing)
+    else:
+        stats["changed"] = True  # New file = always a change
+
     if not dry_run:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(content, encoding="utf-8", newline="\n")
@@ -425,7 +555,9 @@ def sync_file(src: Path, dst: Path, transforms: list[str] | None = None,
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    dry_run = "--dry-run" in sys.argv
+    dry_run  = "--dry-run" in sys.argv
+    do_minor = "--minor" in sys.argv
+    do_major = "--major" in sys.argv
 
     print()
     print(f"  {BOLD}FUNCTIONMAP SYNC{RESET}")
@@ -450,7 +582,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Verify all source files exist
     # -----------------------------------------------------------------------
-    all_sources = PYTHON_TOOLS + SKILL_FILES + HELP_DOCS
+    all_sources = PYTHON_TOOLS + JS_TOOLS + SKILL_FILES + HELP_DOCS
     missing = []
     for src_rel, _ in all_sources:
         src_path = CLAUDE_HOME / src_rel
@@ -475,6 +607,21 @@ def main() -> int:
         dst_path = SRC_DIR / dst_rel
         stats = sync_file(src_path, dst_path, dry_run=dry_run)
         tool_stats.append((dst_rel, stats))
+        status = "would copy" if dry_run else "copied"
+        name = Path(dst_rel).name
+        print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['src_lines']:,} lines]")
+
+    # -----------------------------------------------------------------------
+    # Sync JS tools (verbatim copy)
+    # -----------------------------------------------------------------------
+    print()
+    print(f"  {CYAN}JS tools:{RESET}")
+    js_stats = []
+    for src_rel, dst_rel in JS_TOOLS:
+        src_path = CLAUDE_HOME / src_rel
+        dst_path = SRC_DIR / dst_rel
+        stats = sync_file(src_path, dst_path, dry_run=dry_run)
+        js_stats.append((dst_rel, stats))
         status = "would copy" if dry_run else "copied"
         name = Path(dst_rel).name
         print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['src_lines']:,} lines]")
@@ -530,10 +677,65 @@ def main() -> int:
         print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['dst_lines']:,} lines]")
 
     # -----------------------------------------------------------------------
-    # Collect all warnings
+    # Version management
     # -----------------------------------------------------------------------
     all_warnings = []
-    for _, stats in tool_stats + skill_stats + doc_stats:
+    print()
+    print(f"  {CYAN}Version:{RESET}")
+
+    old_version = read_version()
+
+    # Determine if any synced files actually changed
+    has_changes = any(
+        stats["changed"]
+        for _, stats in tool_stats + js_stats + skill_stats + doc_stats
+        if not stats["skipped"]
+    )
+
+    # Decide what to bump
+    if do_major:
+        new_version = bump_version(old_version, "major")
+        bump_reason = "major bump (--major)"
+    elif do_minor:
+        new_version = bump_version(old_version, "minor")
+        bump_reason = "minor bump (--minor)"
+    elif has_changes:
+        new_version = bump_version(old_version, "patch")
+        bump_reason = "patch bump (changes detected)"
+    else:
+        new_version = old_version
+        bump_reason = None
+
+    if bump_reason:
+        verb = "would bump" if dry_run else "bumped"
+        print(f"    {GREEN}v{old_version} -> v{new_version}{RESET} [{verb}: {bump_reason}]")
+        if not dry_run:
+            write_version(new_version)
+    else:
+        print(f"    {GREEN}v{old_version}{RESET} [no changes, no bump]")
+
+    # Propagate version to all targets
+    src_py  = SRC_DIR / "tools" / "functionmap.py"
+    live_py = CLAUDE_HOME / "tools" / "functionmap" / "functionmap.py"
+
+    propagated = []
+    if patch_py_version(src_py, new_version, dry_run=dry_run):
+        propagated.append("src/__version__")
+    if patch_py_version(live_py, new_version, dry_run=dry_run):
+        propagated.append("live/__version__")
+    if patch_readme_badge(new_version, dry_run=dry_run):
+        propagated.append("README.md badge")
+    if patch_changelog_header(new_version, dry_run=dry_run):
+        propagated.append("CHANGELOG.md header")
+
+    if propagated:
+        verb = "would update" if dry_run else "updated"
+        print(f"    {GREEN}Propagated:{RESET} {verb} {', '.join(propagated)}")
+
+    # -----------------------------------------------------------------------
+    # Collect all warnings
+    # -----------------------------------------------------------------------
+    for _, stats in tool_stats + js_stats + skill_stats + doc_stats:
         all_warnings.extend(stats["warnings"])
 
     # -----------------------------------------------------------------------
@@ -547,7 +749,7 @@ def main() -> int:
         print(f"  {BOLD}  SYNC COMPLETE{RESET}")
     print(f"  {'=' * 60}")
 
-    total_files = len(tool_stats) + len(skill_stats) + len(doc_stats)
+    total_files = len(tool_stats) + len(js_stats) + len(skill_stats) + len(doc_stats)
     print(f"  {total_files} files processed")
 
     if all_warnings:
@@ -560,8 +762,7 @@ def main() -> int:
         print()
         print(f"  {CYAN}Next steps:{RESET}")
         print(f"    1. Review changes:  git diff")
-        print(f"    2. Update changelog: edit CHANGELOG.md")
-        print(f"    3. Commit & tag:    git add -A && git commit && git tag vX.Y.Z")
+        print(f"    2. Commit & tag:    git add -A && git commit && git tag v{new_version}")
 
     print()
     return 1 if all_warnings else 0

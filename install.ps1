@@ -16,7 +16,7 @@ $DocsDir    = Join-Path $ClaudeDir "docs"
 $MapsDir    = Join-Path $ClaudeDir "functionmap"
 $ClaudeMd   = Join-Path $ClaudeDir "CLAUDE.md"
 
-$ToolFiles    = @("functionmap.py", "categorize.py", "quickmap.py", "thirdparty.py", "describe.py")
+$ToolFiles    = @("functionmap.py", "categorize.py", "quickmap.py", "thirdparty.py", "describe.py", "build-callgraph.cjs")
 $CommandFiles = @("functionmap.md", "functionmap-update.md")
 $DocFiles     = @("functionmap-help.md")
 
@@ -279,7 +279,7 @@ function Install-Files {
     foreach ($f in $ToolFiles) {
         Get-InstallFile "src/tools/$f" (Join-Path $ToolsDir $f)
     }
-    Write-Ok "Python tools installed (5 files)"
+    Write-Ok "Tools installed (6 files)"
 
     foreach ($f in $CommandFiles) {
         Get-InstallFile "src/commands/$f" (Join-Path $CommandsDir $f)
@@ -445,6 +445,7 @@ function Test-Installation {
         (Join-Path $ToolsDir "quickmap.py"),
         (Join-Path $ToolsDir "thirdparty.py"),
         (Join-Path $ToolsDir "describe.py"),
+        (Join-Path $ToolsDir "build-callgraph.cjs"),
         (Join-Path $CommandsDir "functionmap.md"),
         (Join-Path $CommandsDir "functionmap-update.md"),
         (Join-Path $DocsDir "functionmap-help.md")
@@ -473,7 +474,7 @@ function Test-Installation {
     }
 
     if ($errors -eq 0) {
-        Write-Ok "All 8 files verified"
+        Write-Ok "All 9 files verified"
         Write-Ok "CLAUDE.md sentinels verified"
     } else {
         Write-Warn "$errors verification issue(s) found"

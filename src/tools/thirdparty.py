@@ -840,7 +840,7 @@ def map_library(
     tp_root = functionmap_root / "third-party"
     lib_dir = tp_root / lib_name / version
 
-    # Skip libraries that match a registered project (e.g., cmsb -> cmsb-3-82)
+    # Skip libraries that match a registered project (e.g., mylib -> mylib-2-0)
     registry_path = functionmap_root / "_registry.json"
     if registry_path.exists():
         try:

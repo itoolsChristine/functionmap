@@ -16,7 +16,7 @@ MAPS_DIR="$CLAUDE_DIR/functionmap"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
 # Files to install  (source-relative-path : destination)
-TOOL_FILES="functionmap.py categorize.py quickmap.py thirdparty.py describe.py"
+TOOL_FILES="functionmap.py categorize.py quickmap.py thirdparty.py describe.py build-callgraph.cjs"
 COMMAND_FILES="functionmap.md functionmap-update.md"
 DOC_FILES="functionmap-help.md"
 
@@ -285,7 +285,7 @@ install_files() {
     for f in $TOOL_FILES; do
         get_file "src/tools/$f" "$TOOLS_DIR/$f"
     done
-    ok "Python tools installed (5 files)"
+    ok "Tools installed (6 files)"
 
     # Skill commands
     for f in $COMMAND_FILES; do
@@ -464,6 +464,7 @@ verify() {
         "$TOOLS_DIR/quickmap.py"
         "$TOOLS_DIR/thirdparty.py"
         "$TOOLS_DIR/describe.py"
+        "$TOOLS_DIR/build-callgraph.cjs"
         "$COMMANDS_DIR/functionmap.md"
         "$COMMANDS_DIR/functionmap-update.md"
         "$DOCS_DIR/functionmap-help.md"
@@ -491,7 +492,7 @@ verify() {
     fi
 
     if [ $errors -eq 0 ]; then
-        ok "All 8 files verified"
+        ok "All 9 files verified"
         ok "CLAUDE.md sentinels verified"
     else
         warn "$errors verification issue(s) found"

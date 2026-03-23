@@ -17,7 +17,7 @@ is available.
 Usage:
     python describe.py --stats            # Show description coverage statistics
     python describe.py --dry-run          # Preview descriptions without writing
-    python describe.py --project zendb    # Target specific project
+    python describe.py --project my-project  # Target specific project
 """
 
 from __future__ import annotations
@@ -324,11 +324,6 @@ COMPOUND_WORDS: Dict[str, str] = {
     'ssh':         'SSH',
     'aws':         'AWS',
     's3':          'S3',
-    'zendb':       'ZenDB',
-    'smartarray':  'SmartArray',
-    'smartstring': 'SmartString',
-    'pluginaction': 'plugin action',
-    'addhandler':  'add handler',
 }
 
 # Proper nouns that should always be capitalized
@@ -425,7 +420,7 @@ def _merge_compound_parts(parts: List[str]) -> List[str]:
 
     E.g., ['Tiny', 'MCE'] -> ['TinyMCE']
           ['My', 'SQL']   -> ['MySQL']
-          ['Smart', 'Array'] -> ['SmartArray']
+          ['Java', 'Script'] -> ['JavaScript']
     """
     if len(parts) <= 1:
         return list(parts)
@@ -561,7 +556,7 @@ def _humanize_class_name(class_name: str) -> str:
 
     Examples:
         'DB'           -> 'database'
-        'SmartArray'   -> 'SmartArray'
+        'MySQL'        -> 'MySQL'
         'CellOperations' -> 'cell'
     """
     lower = class_name.lower()
