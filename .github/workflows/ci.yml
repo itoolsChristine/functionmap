@@ -24,3 +24,14 @@ jobs:
 
       - name: Run sync tests
         run: python -m unittest tests.test_sync -v
+
+      - name: Run MCP tests
+        run: |
+          pip install "mcp>=1.20,<2.0" --quiet
+          python -m unittest tests.test_mcp -v
+
+      - name: Run MCP fixture tests
+        run: python -m unittest tests.test_mcp_fixture -v
+
+      - name: Run parity tests
+        run: python -m unittest tests.test_parity -v

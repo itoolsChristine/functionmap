@@ -8,7 +8,9 @@ $ToolsDir    = Join-Path $ClaudeDir "tools\functionmap"
 $CommandsDir = Join-Path $ClaudeDir "commands"
 $DocsDir     = Join-Path $ClaudeDir "docs"
 $MapsDir     = Join-Path $ClaudeDir "functionmap"
+$McpDir      = Join-Path $ClaudeDir "functionmap-mcp"
 $ClaudeMd    = Join-Path $ClaudeDir "CLAUDE.md"
+$ClaudeJson  = Join-Path $HomeDir ".claude.json"
 
 # ============================================================================
 #  Banner
@@ -30,11 +32,12 @@ function Write-Warn { param([string]$Msg) Write-Host "  [WARN]  $Msg" -Foregroun
 
 $hasTools    = Test-Path $ToolsDir
 $hasCmds     = (Test-Path (Join-Path $CommandsDir "functionmap.md")) -or (Test-Path (Join-Path $CommandsDir "functionmap-update.md"))
-$hasDocs     = Test-Path (Join-Path $DocsDir "functionmap-help.md")
+$hasDocs     = (Test-Path (Join-Path $DocsDir "functionmap-help.md")) -or (Test-Path (Join-Path $DocsDir "functionmap-mcp.md"))
+$hasMcp      = Test-Path $McpDir
 $hasClaudeMd = Test-Path $ClaudeMd
 $hasMaps     = (Test-Path $MapsDir) -and (Get-ChildItem $MapsDir -ErrorAction SilentlyContinue | Select-Object -First 1)
 
-if (-not $hasTools -and -not $hasCmds -and -not $hasDocs) {
+if (-not $hasTools -and -not $hasCmds -and -not $hasDocs -and -not $hasMcp) {
     Write-Info "Functionmap does not appear to be installed. Nothing to uninstall."
     exit 0
 }
@@ -45,6 +48,7 @@ Write-Host "  The following will be backed up before removal:"
 if ($hasTools)    { Write-Host "    - Python tools ($ToolsDir)" }
 if ($hasCmds)     { Write-Host "    - Skill commands (functionmap.md, functionmap-update.md)" }
 if ($hasDocs)     { Write-Host "    - Help documentation (functionmap-help.md)" }
+if ($hasMcp)      { Write-Host "    - MCP server ($McpDir)" }
 if ($hasClaudeMd) { Write-Host "    - CLAUDE.md (functionmap sentinel blocks will be removed)" }
 if ($hasMaps)     { Write-Host "    - Generated function maps ($MapsDir)" }
 Write-Host ""
@@ -72,7 +76,9 @@ $BackupDir = ""
 $hasExisting = (Test-Path $ToolsDir) -or
     (Test-Path (Join-Path $CommandsDir "functionmap.md")) -or
     (Test-Path (Join-Path $CommandsDir "functionmap-update.md")) -or
-    (Test-Path (Join-Path $DocsDir "functionmap-help.md"))
+    (Test-Path (Join-Path $DocsDir "functionmap-help.md")) -or
+    (Test-Path (Join-Path $DocsDir "functionmap-mcp.md")) -or
+    (Test-Path $McpDir)
 
 if ($hasExisting) {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -88,8 +94,16 @@ if ($hasExisting) {
         $src = Join-Path $CommandsDir $f
         if (Test-Path $src) { Copy-Item $src "$BackupDir\commands\$f" -Force }
     }
-    $helpSrc = Join-Path $DocsDir "functionmap-help.md"
-    if (Test-Path $helpSrc) { Copy-Item $helpSrc "$BackupDir\docs\functionmap-help.md" -Force }
+    foreach ($f in @("functionmap-help.md", "functionmap-mcp.md")) {
+        $src = Join-Path $DocsDir $f
+        if (Test-Path $src) { Copy-Item $src "$BackupDir\docs\$f" -Force }
+    }
+    # Back up MCP server
+    if (Test-Path $McpDir) {
+        New-Item -ItemType Directory -Path "$BackupDir\mcp" -Force | Out-Null
+        Get-ChildItem $McpDir -File | ForEach-Object { Copy-Item $_.FullName "$BackupDir\mcp\$($_.Name)" -Force }
+    }
+
     if (Test-Path $ClaudeMd) { Copy-Item $ClaudeMd "$BackupDir\CLAUDE.md" -Force }
 
     # Back up generated function maps
@@ -125,10 +139,34 @@ foreach ($f in @("functionmap.md", "functionmap-update.md")) {
 }
 
 # Help docs
-$helpDoc = Join-Path $DocsDir "functionmap-help.md"
-if (Test-Path $helpDoc) {
-    Remove-Item $helpDoc -Force
-    Write-Ok "Removed $helpDoc"
+foreach ($f in @("functionmap-help.md", "functionmap-mcp.md")) {
+    $target = Join-Path $DocsDir $f
+    if (Test-Path $target) {
+        Remove-Item $target -Force
+        Write-Ok "Removed $target"
+    }
+}
+
+# MCP server
+if (Test-Path $McpDir) {
+    Remove-Item $McpDir -Recurse -Force
+    Write-Ok "Removed $McpDir"
+} else {
+    Write-Info "MCP server directory not found (already removed?)"
+}
+
+# Deregister from .claude.json
+if (Test-Path $ClaudeJson) {
+    try {
+        $jsonContent = Get-Content $ClaudeJson -Raw | ConvertFrom-Json
+        if ($jsonContent.mcpServers -and $jsonContent.mcpServers.functionmap) {
+            $jsonContent.mcpServers.PSObject.Properties.Remove("functionmap")
+            $jsonContent | ConvertTo-Json -Depth 10 | Set-Content $ClaudeJson -Encoding UTF8
+            Write-Ok "MCP server deregistered from .claude.json"
+        }
+    } catch {
+        Write-Warn "Failed to update .claude.json: $_"
+    }
 }
 
 # ============================================================================

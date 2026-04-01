@@ -51,7 +51,15 @@ SKILL_FILES = [
 ]
 
 HELP_DOCS = [
-    ("docs/functionmap-help.md", "docs/functionmap-help.md"),
+    ("docs/functionmap-help.md",  "docs/functionmap-help.md"),
+    ("docs/functionmap-mcp.md",   "docs/functionmap-mcp.md"),
+]
+
+MCP_FILES = [
+    ("functionmap-mcp/server.py",        "mcp/server.py"),
+    ("functionmap-mcp/index.py",         "mcp/index.py"),
+    ("functionmap-mcp/search.py",        "mcp/search.py"),
+    ("functionmap-mcp/requirements.txt", "mcp/requirements.txt"),
 ]
 
 # ANSI color codes
@@ -582,7 +590,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Verify all source files exist
     # -----------------------------------------------------------------------
-    all_sources = PYTHON_TOOLS + JS_TOOLS + SKILL_FILES + HELP_DOCS
+    all_sources = PYTHON_TOOLS + JS_TOOLS + SKILL_FILES + HELP_DOCS + MCP_FILES
     missing = []
     for src_rel, _ in all_sources:
         src_path = CLAUDE_HOME / src_rel
@@ -677,6 +685,21 @@ def main() -> int:
         print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['dst_lines']:,} lines]")
 
     # -----------------------------------------------------------------------
+    # Sync MCP server (verbatim copy)
+    # -----------------------------------------------------------------------
+    print()
+    print(f"  {CYAN}MCP server:{RESET}")
+    mcp_stats = []
+    for src_rel, dst_rel in MCP_FILES:
+        src_path = CLAUDE_HOME / src_rel
+        dst_path = SRC_DIR / dst_rel
+        stats = sync_file(src_path, dst_path, dry_run=dry_run)
+        mcp_stats.append((dst_rel, stats))
+        status = "would copy" if dry_run else "copied"
+        name = Path(dst_rel).name
+        print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['src_lines']:,} lines]")
+
+    # -----------------------------------------------------------------------
     # Version management
     # -----------------------------------------------------------------------
     all_warnings = []
@@ -688,7 +711,7 @@ def main() -> int:
     # Determine if any synced files actually changed
     has_changes = any(
         stats["changed"]
-        for _, stats in tool_stats + js_stats + skill_stats + doc_stats
+        for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats
         if not stats["skipped"]
     )
 
@@ -735,7 +758,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Collect all warnings
     # -----------------------------------------------------------------------
-    for _, stats in tool_stats + js_stats + skill_stats + doc_stats:
+    for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats:
         all_warnings.extend(stats["warnings"])
 
     # -----------------------------------------------------------------------
@@ -749,7 +772,7 @@ def main() -> int:
         print(f"  {BOLD}  SYNC COMPLETE{RESET}")
     print(f"  {'=' * 60}")
 
-    total_files = len(tool_stats) + len(js_stats) + len(skill_stats) + len(doc_stats)
+    total_files = len(tool_stats) + len(js_stats) + len(skill_stats) + len(doc_stats) + len(mcp_stats)
     print(f"  {total_files} files processed")
 
     if all_warnings:

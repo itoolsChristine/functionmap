@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-03-23
+
+### Added
+- **MCP server** (`functionmap-mcp/`): Fast function search and lookup via 4 MCP tools (`functionmap_search`, `functionmap_detail`, `functionmap_categories`, `functionmap_projects`). Queries `_functions.json` directly instead of parsing markdown -- collapses 2-3 Read calls into a single tool call with relevance-scored results. Lazy per-project loading with mtime-based freshness checks. Supports third-party libraries (`project="third-party/jquery/2.1.4"`), sub-projects (`project="squimsh/output"`), and exposes dependency chains per project.
+- **MCP reference doc** (`functionmap-mcp.md`): Detailed usage guide with workflow examples, dual-search strategy, project discovery procedure, third-party/sub-project addressing, and accountability format.
+- **Fixture-based MCP tests** (`test_mcp_fixture.py`): 43 tests covering index loading, search scoring, and all 4 server tools against synthetic fixture data. Runs in CI without requiring real function map data.
+- **Parity tests** (`test_parity.py`): 11 tests verifying that the MCP server and MD-file discovery paths return equivalent data -- same functions, same file paths, same line numbers, same categories. Ensures both paths work regardless of MCP installation choice.
+- **Synthetic fixture data** (`tests/fixtures/functionmap/`): Self-contained test project with 10 functions across 2 categories, complete with registry, taxonomy, category markdown files, and project index.
+
+### Changed
+- **MCP installation is now optional**: Installers prompt whether to include the MCP server (default: yes for fresh installs and non-interactive mode). Use `--mcp` / `--no-mcp` flags (`-Mcp` / `-NoMcp` in PowerShell) to bypass the prompt. Re-running with `--no-mcp` on an existing MCP install cleanly deregisters and removes MCP files. The CLAUDE.md instructions already handle both modes at runtime.
+- **Sync pipeline**: Now includes MCP server files in sync.
+- **Install/uninstall scripts**: Installers now register/deregister the MCP server in `~/.claude.json`. MCP installation is optional via `--mcp` / `--no-mcp` flags.
+- **README.md**: Added MCP flag documentation and troubleshooting row.
+- **CI**: Added fixture-based MCP and parity test steps.
+- **Install/uninstall tests**: Expanded to cover three paths (with MCP, without MCP, cross-mode upgrade) with shared verification helpers.
+- **CLAUDE.md instructions**: Added MCP-preferred discovery section -- Claude uses MCP tools when available, falls back to Read-based procedure when not.
+
 ## [1.1.0] - 2026-03-23
 
 ### Added

@@ -24,13 +24,13 @@ There are two copies of the functionmap tools:
 | `src/tools/` | Python + JS extraction/categorization engine | Yes |
 | `src/commands/` | Skill definition files (`/functionmap`, `/functionmap-update`) | Yes |
 | `src/docs/` | Help documentation | Yes |
+| `src/mcp/` | MCP server for fast function search (4 files) | Yes |
 | `src/claude-md/` | CLAUDE.md integration content (instructions + registry templates) | Yes |
-| `plans/` | Implementation plans -- name files with date prefix (e.g., `2026-03-10-initial-packaging.md`) | No (gitignored) |
-| `plans/evidence/` | Evidence collected by agents/swarms during plan execution | No (gitignored) |
-| `docs/` | Supporting documentation kept on-file for reference | No (gitignored) |
 | `temp/` | Sandboxed test directory (created/destroyed by test_install_uninstall.sh) | No (gitignored) |
 
-### Installed file manifest (9 files)
+### Installed file manifest (9 core + 5 optional MCP)
+
+**Core files (always installed):**
 
 | File | Destination |
 |------|-------------|
@@ -43,6 +43,18 @@ There are two copies of the functionmap tools:
 | `functionmap.md` | `~/.claude/commands/` |
 | `functionmap-update.md` | `~/.claude/commands/` |
 | `functionmap-help.md` | `~/.claude/docs/` |
+
+**MCP files (optional, included by default):**
+
+| File | Destination |
+|------|-------------|
+| `functionmap-mcp.md` | `~/.claude/docs/` |
+| `server.py` | `~/.claude/functionmap-mcp/` |
+| `index.py` | `~/.claude/functionmap-mcp/` |
+| `search.py` | `~/.claude/functionmap-mcp/` |
+| `requirements.txt` | `~/.claude/functionmap-mcp/` |
+
+The installer prompts for MCP inclusion. Use `--mcp` / `--no-mcp` flags to bypass the prompt. Re-run with `--no-mcp` to remove MCP from an existing install (deregisters and cleans up).
 
 ## Development Workflow
 
@@ -80,6 +92,8 @@ There are two copies of the functionmap tools:
 ```bash
 python -m unittest tests.test_extraction -v    # Extraction against fixtures
 python -m unittest tests.test_sync -v           # Path normalization + swarm removal
+python -m unittest tests.test_mcp_fixture -v   # MCP server against synthetic fixtures
+python -m unittest tests.test_parity -v        # MCP vs MD-file discovery parity
 ```
 
 ### Install/uninstall test (manual, not in CI)
@@ -88,11 +102,11 @@ python -m unittest tests.test_sync -v           # Path normalization + swarm rem
 bash tests/test_install_uninstall.sh
 ```
 
-Creates a sandboxed `temp/` directory with a fake HOME, runs install, verifies all 9 files + CLAUDE.md sentinels + idempotency, runs uninstall, verifies cleanup + user data preservation. 39 checks total.
+Creates a sandboxed `temp/` directory with a fake HOME and tests three paths: install with MCP (`--mcp`), install without MCP (`--no-mcp`), and cross-mode upgrade (MCP -> no-MCP -> MCP). Each path verifies file counts, CLAUDE.md sentinels, `.claude.json` registration, idempotency, and cleanup.
 
 ### CI matrix
 
-Python 3.10 + 3.12 across ubuntu, macos, windows (6 jobs). Uses `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`.
+Python 3.10 + 3.12 across ubuntu, macos, windows (6 jobs). Uses `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`. Runs extraction, sync, MCP fixture, and parity tests. The `test_mcp` suite (real data) skips in CI since no maps exist.
 
 ## CLAUDE.md Integration (installed by installer)
 

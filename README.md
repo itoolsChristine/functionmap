@@ -2,7 +2,7 @@
 
 **Give Claude a map of your codebase so it finds existing functions before writing new ones.**
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 [![CI](https://github.com/itoolsChristine/functionmap/actions/workflows/ci.yml/badge.svg)](https://github.com/itoolsChristine/functionmap/actions/workflows/ci.yml)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -52,6 +52,12 @@ cd functionmap
 install.cmd         # Windows CMD (or double-click)
 .\install.ps1       # Windows PowerShell
 ./install.sh        # macOS/Linux/Git Bash
+```
+
+The installer will ask whether to include the optional MCP server for faster function lookups. Use `--mcp` or `--no-mcp` (`-Mcp` / `-NoMcp` in PowerShell) to bypass the prompt:
+```bash
+./install.sh --no-mcp    # Skip MCP server
+./install.sh --mcp       # Include MCP server (default)
 ```
 
 ## Requirements
@@ -164,6 +170,7 @@ This removes installed commands, tools, docs, and CLAUDE.md sentinel blocks. You
 | `~/.claude/` doesn't exist | Install and run [Claude Code](https://docs.anthropic.com/en/docs/claude-code) at least once |
 | Commands not showing up | Restart Claude Code after installation |
 | Maps generated but Claude doesn't use them | Check that both CLAUDE.md sentinel blocks are present (instructions + registry) |
+| Want to add/remove MCP after install | Re-run the installer with `--mcp` or `--no-mcp` |
 
 ## Architecture
 
@@ -191,6 +198,7 @@ functionmap/
 |   |
 |   |-- docs/                      # Help documentation
 |   |   |-- functionmap-help.md
+|   |   |-- functionmap-mcp.md     # MCP usage reference
 |   |
 |   |-- tools/                     # Extraction and categorization engine
 |   |   |-- functionmap.py
@@ -200,6 +208,12 @@ functionmap/
 |   |   |-- describe.py
 |   |   |-- build-callgraph.cjs    # Inter-function call graph (Node.js)
 |   |
+|   |-- mcp/                       # MCP server for fast function search
+|   |   |-- server.py
+|   |   |-- index.py
+|   |   |-- search.py
+|   |   |-- requirements.txt
+|   |
 |   |-- claude-md/                 # CLAUDE.md integration content
 |       |-- functionmap-instructions.md
 |       |-- functionmap-registry.md
@@ -207,12 +221,17 @@ functionmap/
 |-- tests/
 |   |-- test_install_uninstall.sh  # End-to-end install/integrity/uninstall test
 |   |-- test_install.ps1
-|   |-- test_extraction.py
-|   |-- test_sync.py
+|   |-- test_extraction.py         # Extraction against fixtures
+|   |-- test_sync.py               # Path normalization + swarm removal
+|   |-- test_mcp.py                # MCP server against real data (skipped in CI)
+|   |-- test_mcp_fixture.py        # MCP server against synthetic fixtures
+|   |-- test_parity.py             # MCP vs MD-file discovery parity
 |   |-- fixtures/
 |       |-- sample.php
 |       |-- sample.js
 |       |-- sample.ts
+|       |-- functionmap/           # Synthetic fixture data for MCP tests
+|           |-- testproject/
 |
 |-- .github/
     |-- workflows/

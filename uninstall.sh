@@ -7,7 +7,9 @@ TOOLS_DIR="$CLAUDE_DIR/tools/functionmap"
 COMMANDS_DIR="$CLAUDE_DIR/commands"
 DOCS_DIR="$CLAUDE_DIR/docs"
 MAPS_DIR="$CLAUDE_DIR/functionmap"
+MCP_DIR="$CLAUDE_DIR/functionmap-mcp"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+CLAUDE_JSON="$HOME/.claude.json"
 
 # ============================================================================
 #  Banner
@@ -30,16 +32,18 @@ warn()  { echo "  [WARN]  $*"; }
 has_tools=false
 has_cmds=false
 has_docs=false
+has_mcp=false
 has_claude_md=false
 has_maps=false
 
 [ -d "$TOOLS_DIR" ] && has_tools=true
 [ -f "$COMMANDS_DIR/functionmap.md" ] || [ -f "$COMMANDS_DIR/functionmap-update.md" ] && has_cmds=true
-[ -f "$DOCS_DIR/functionmap-help.md" ] && has_docs=true
+[ -f "$DOCS_DIR/functionmap-help.md" ] || [ -f "$DOCS_DIR/functionmap-mcp.md" ] && has_docs=true
+[ -d "$MCP_DIR" ] && has_mcp=true
 [ -f "$CLAUDE_MD" ] && has_claude_md=true
 [ -d "$MAPS_DIR" ] && [ "$(ls -A "$MAPS_DIR" 2>/dev/null)" ] && has_maps=true
 
-if ! $has_tools && ! $has_cmds && ! $has_docs; then
+if ! $has_tools && ! $has_cmds && ! $has_docs && ! $has_mcp; then
     info "Functionmap does not appear to be installed. Nothing to uninstall."
     exit 0
 fi
@@ -50,6 +54,7 @@ echo "  The following will be backed up before removal:"
 if $has_tools;     then echo "    - Python tools ($TOOLS_DIR)"; fi
 if $has_cmds;      then echo "    - Skill commands (functionmap.md, functionmap-update.md)"; fi
 if $has_docs;      then echo "    - Help documentation (functionmap-help.md)"; fi
+if $has_mcp;       then echo "    - MCP server ($MCP_DIR)"; fi
 if $has_claude_md; then echo "    - CLAUDE.md (functionmap sentinel blocks will be removed)"; fi
 if $has_maps;      then echo "    - Generated function maps ($MAPS_DIR)"; fi
 echo ""
@@ -84,6 +89,8 @@ has_existing=false
 [ -f "$COMMANDS_DIR/functionmap.md" ] && has_existing=true
 [ -f "$COMMANDS_DIR/functionmap-update.md" ] && has_existing=true
 [ -f "$DOCS_DIR/functionmap-help.md" ] && has_existing=true
+[ -f "$DOCS_DIR/functionmap-mcp.md" ] && has_existing=true
+[ -d "$MCP_DIR" ] && has_existing=true
 
 if $has_existing; then
     BACKUP_DIR="$CLAUDE_DIR/.functionmap-backup-$(date +%Y%m%d-%H%M%S)"
@@ -100,7 +107,15 @@ if $has_existing; then
     done
 
     # Back up docs
-    [ -f "$DOCS_DIR/functionmap-help.md" ] && cp "$DOCS_DIR/functionmap-help.md" "$BACKUP_DIR/docs/"
+    for f in functionmap-help.md functionmap-mcp.md; do
+        [ -f "$DOCS_DIR/$f" ] && cp "$DOCS_DIR/$f" "$BACKUP_DIR/docs/"
+    done
+
+    # Back up MCP server
+    if [ -d "$MCP_DIR" ]; then
+        mkdir -p "$BACKUP_DIR/mcp"
+        cp "$MCP_DIR"/* "$BACKUP_DIR/mcp/" 2>/dev/null || true
+    fi
 
     # Back up CLAUDE.md
     [ -f "$CLAUDE_MD" ] && cp "$CLAUDE_MD" "$BACKUP_DIR/CLAUDE.md"
@@ -138,9 +153,41 @@ for f in functionmap.md functionmap-update.md; do
 done
 
 # Help docs
-if [ -f "$DOCS_DIR/functionmap-help.md" ]; then
-    rm -f "$DOCS_DIR/functionmap-help.md"
-    ok "Removed $DOCS_DIR/functionmap-help.md"
+for f in functionmap-help.md functionmap-mcp.md; do
+    target="$DOCS_DIR/$f"
+    if [ -f "$target" ]; then
+        rm -f "$target"
+        ok "Removed $target"
+    fi
+done
+
+# MCP server
+if [ -d "$MCP_DIR" ]; then
+    rm -rf "$MCP_DIR"
+    ok "Removed $MCP_DIR"
+else
+    info "MCP server directory not found (already removed?)"
+fi
+
+# Deregister from .claude.json
+if [ -f "$CLAUDE_JSON" ]; then
+    PYTHON=""
+    command -v python3 &>/dev/null && PYTHON="python3" || PYTHON="python"
+    if [ -n "$PYTHON" ]; then
+        $PYTHON - "$CLAUDE_JSON" << 'PYEOF' 2>/dev/null && ok "MCP server deregistered from .claude.json"
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    if 'functionmap' in data.get('mcpServers', {}):
+        del data['mcpServers']['functionmap']
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+PYEOF
+    fi
 fi
 
 # ============================================================================
