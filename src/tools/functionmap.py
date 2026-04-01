@@ -10,7 +10,7 @@ Output: _functions.json with raw function data (no categories)
 
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 import argparse
 import datetime as _dt

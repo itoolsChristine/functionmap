@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-03-31
+
+### Added
+- **SessionStart hook** (`src/hooks/`): Automatically detects if the current project has a function map at session start (and resume). Scans `~/.claude/functionmap/*/_meta.json` for a project whose `root_path` matches the working directory, then outputs a brief context message telling Claude which project is mapped, how many functions it has, and what dependencies to also search. Installed to `~/.claude/scripts/functionmap/` and registered in `~/.claude/settings.json`.
+
+### Changed
+- **CLAUDE.md instructions rewritten**: Replaced the 87-line procedural instruction block with a concise examples-based format. The new instructions teach by showing three real usage patterns instead of demanding a 5-step procedure.
+- **Install scripts**: Now install hook scripts to `~/.claude/scripts/functionmap/` and register a `SessionStart` hook entry in `~/.claude/settings.json`. Hook registration merges into existing settings - preserves other hooks and MCP configurations.
+- **Uninstall scripts**: Now clean up hook scripts directory (`~/.claude/scripts/functionmap/`) and deregister the SessionStart hook entry from `~/.claude/settings.json`. Only removes the functionmap hook entry - other hooks are preserved.
+- **sync.py**: Now syncs hook scripts (`src/hooks/`) and extracts the FUNCTIONMAP:INSTRUCTIONS section from the live `~/.claude/CLAUDE.md` (with substitutions applied) instead of maintaining the instructions file manually.
+- **Install/uninstall tests**: Added verification for hook file installation, settings.json hook registration, preservation of other tools' hooks, and post-uninstall cleanup of both.
+
+### Fixed
+- **install.sh portability**: `install_hooks()` hardcoded `python3` which doesn't exist on Windows/Git Bash. Now uses `$PYTHON` (detected at startup) with heredoc syntax, matching the pattern used by all other functions.
+
 ## [1.2.0] - 2026-03-23
 
 ### Added

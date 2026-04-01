@@ -14,14 +14,17 @@ COMMANDS_DIR="$CLAUDE_DIR/commands"
 DOCS_DIR="$CLAUDE_DIR/docs"
 MAPS_DIR="$CLAUDE_DIR/functionmap"
 MCP_DIR="$CLAUDE_DIR/functionmap-mcp"
+SCRIPTS_DIR="$CLAUDE_DIR/scripts/functionmap"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 CLAUDE_JSON="$HOME/.claude.json"
+SETTINGS_JSON="$CLAUDE_DIR/settings.json"
 
 # Files to install  (source-relative-path : destination)
 TOOL_FILES="functionmap.py categorize.py quickmap.py thirdparty.py describe.py build-callgraph.cjs"
 COMMAND_FILES="functionmap.md functionmap-update.md"
 DOC_FILES="functionmap-help.md functionmap-mcp.md"
 MCP_FILES="server.py index.py search.py requirements.txt"
+HOOK_FILES="session-start.sh session-start.py"
 
 # ============================================================================
 #  CLI flag parsing
@@ -614,6 +617,75 @@ PYEOF
 }
 
 # ============================================================================
+#  Hook installation
+# ============================================================================
+
+install_hooks() {
+    mkdir -p "$SCRIPTS_DIR"
+
+    for f in $HOOK_FILES; do
+        if [ -f "$SCRIPT_DIR/src/hooks/$f" ]; then
+            cp "$SCRIPT_DIR/src/hooks/$f" "$SCRIPTS_DIR/$f"
+        elif curl -fsSL "$REPO_URL/src/hooks/$f" -o "$SCRIPTS_DIR/$f" 2>/dev/null; then
+            true
+        else
+            warn "Failed to install hook: $f"
+            return 1
+        fi
+    done
+    ok "Hook scripts installed ($(echo $HOOK_FILES | wc -w | tr -d ' ') files)"
+
+    # Register SessionStart hook in settings.json
+    if [ ! -f "$SETTINGS_JSON" ]; then
+        echo '{"hooks":{}}' > "$SETTINGS_JSON"
+    fi
+
+    $PYTHON - "$SETTINGS_JSON" "$SCRIPTS_DIR" << 'PYEOF'
+import json, sys
+
+settings_path = sys.argv[1]
+scripts_dir = sys.argv[2]
+
+with open(settings_path, 'r') as f:
+    data = json.load(f)
+
+if 'hooks' not in data:
+    data['hooks'] = {}
+if 'SessionStart' not in data['hooks']:
+    data['hooks']['SessionStart'] = []
+
+# Find existing functionmap entry
+fm_command = f'bash "{scripts_dir}/session-start.sh"'
+existing_idx = None
+for i, group in enumerate(data['hooks']['SessionStart']):
+    for h in group.get('hooks', []):
+        if 'functionmap' in h.get('command', ''):
+            existing_idx = i
+            break
+
+new_group = {
+    'matcher': 'startup|resume',
+    'hooks': [{'type': 'command', 'command': fm_command}]
+}
+
+if existing_idx is not None:
+    data['hooks']['SessionStart'][existing_idx] = new_group
+else:
+    data['hooks']['SessionStart'].append(new_group)
+
+with open(settings_path, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+PYEOF
+
+    if [ $? -eq 0 ]; then
+        ok "SessionStart hook registered in settings.json"
+    else
+        warn "Failed to register hook in settings.json"
+    fi
+}
+
+# ============================================================================
 #  Post-install verification
 # ============================================================================
 
@@ -647,6 +719,12 @@ verify() {
             "$MCP_DIR/requirements.txt"
         )
     fi
+
+    # Hook files
+    expected_files+=(
+        "$SCRIPTS_DIR/session-start.sh"
+        "$SCRIPTS_DIR/session-start.py"
+    )
 
     for f in "${expected_files[@]}"; do
         if [ ! -f "$f" ]; then
@@ -732,6 +810,7 @@ main() {
     write_version
     inject_claude_md
     register_mcp
+    install_hooks
     trap - ERR
     verify || true
     success_message

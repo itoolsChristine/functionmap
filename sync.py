@@ -4,6 +4,7 @@ sync.py -- Sync functionmap files from ~/.claude/ into the repo's src/ directory
 Copies Python tools verbatim and applies transforms to .md skill/doc files:
 - Path normalization (Windows-specific paths -> $HOME/.claude/)
 - /swarm removal (functionmap.md only)
+- CLAUDE.md section extraction (functionmap instructions between sentinel tags)
 
 Also handles version management:
 - Reads VERSION file as single source of truth
@@ -61,6 +62,17 @@ MCP_FILES = [
     ("functionmap-mcp/search.py",        "mcp/search.py"),
     ("functionmap-mcp/requirements.txt", "mcp/requirements.txt"),
 ]
+
+HOOK_FILES = [
+    ("scripts/functionmap/session-start.sh", "hooks/session-start.sh"),
+    ("scripts/functionmap/session-start.py", "hooks/session-start.py"),
+]
+
+# Sentinel tags for the CLAUDE.md functionmap instructions section
+CLAUDE_MD_SENTINELS = (
+    "<!-- FUNCTIONMAP:INSTRUCTIONS:BEGIN -->",
+    "<!-- FUNCTIONMAP:INSTRUCTIONS:END -->",
+)
 
 # ANSI color codes
 GREEN  = "\033[92m"
@@ -267,6 +279,97 @@ def apply_substitutions(content: str, substitutions: dict[str, str]) -> str:
     content = re.sub(r'~/[^\s"\'`\n]*\\[^\s"\'`\n]*', _fix_backslashes, content)
 
     return content
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE.md section extraction
+# ---------------------------------------------------------------------------
+
+def extract_functionmap_section(claude_md_path: Path) -> tuple[str, list[str]]:
+    """Extract the functionmap instructions section from CLAUDE.md.
+
+    Returns:
+        (extracted_content_with_sentinels, list_of_warnings)
+
+    Extracts the content between FUNCTIONMAP:INSTRUCTIONS:BEGIN/END sentinel
+    tags (inclusive).
+    """
+    warnings: list[str] = []
+
+    if not claude_md_path.exists():
+        warnings.append(f"CLAUDE.md not found: {claude_md_path}")
+        return "", warnings
+
+    content = claude_md_path.read_text(encoding="utf-8")
+
+    begin_tag = CLAUDE_MD_SENTINELS[0]
+    end_tag   = CLAUDE_MD_SENTINELS[1]
+
+    begin_idx = content.find(begin_tag)
+    end_idx   = content.find(end_tag, begin_idx + 1) if begin_idx != -1 else -1
+
+    if begin_idx != -1 and end_idx != -1:
+        result = content[begin_idx:end_idx + len(end_tag)].rstrip() + "\n"
+        return result, warnings
+
+    if begin_idx == -1:
+        warnings.append(f"Sentinel not found: '{begin_tag}'")
+    elif end_idx == -1:
+        warnings.append(f"Sentinel not found: '{end_tag}'")
+
+    return "", warnings
+
+
+def sync_claude_md_section(
+    dst: Path,
+    dry_run: bool = False,
+    substitutions: dict[str, str] | None = None,
+) -> dict:
+    """Extract the functionmap instructions section from CLAUDE.md and write to dst.
+
+    Returns:
+        dict with keys: src, dst, src_lines, dst_lines, warnings, skipped, changed
+    """
+    claude_md_path = CLAUDE_HOME / "CLAUDE.md"
+    stats = {
+        "src":       claude_md_path,
+        "dst":       dst,
+        "src_lines": 0,
+        "dst_lines": 0,
+        "warnings":  [],
+        "skipped":   False,
+        "changed":   False,
+    }
+
+    content, extract_warnings = extract_functionmap_section(claude_md_path)
+    stats["warnings"].extend(extract_warnings)
+
+    if not content:
+        stats["skipped"] = True
+        return stats
+
+    stats["src_lines"] = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+
+    # Apply path normalization
+    content = normalize_paths(content)
+
+    if substitutions:
+        content = apply_substitutions(content, substitutions)
+
+    stats["dst_lines"] = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+
+    # Detect changes
+    if dst.exists():
+        existing = dst.read_text(encoding="utf-8")
+        stats["changed"] = (content != existing)
+    else:
+        stats["changed"] = True
+
+    if not dry_run:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(content, encoding="utf-8", newline="\n")
+
+    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -590,12 +693,17 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Verify all source files exist
     # -----------------------------------------------------------------------
-    all_sources = PYTHON_TOOLS + JS_TOOLS + SKILL_FILES + HELP_DOCS + MCP_FILES
+    all_sources = PYTHON_TOOLS + JS_TOOLS + SKILL_FILES + HELP_DOCS + MCP_FILES + HOOK_FILES
     missing = []
     for src_rel, _ in all_sources:
         src_path = CLAUDE_HOME / src_rel
         if not src_path.exists():
             missing.append(str(src_path))
+
+    # Also check CLAUDE.md (needed for instruction extraction)
+    claude_md_path = CLAUDE_HOME / "CLAUDE.md"
+    if not claude_md_path.exists():
+        missing.append(str(claude_md_path))
 
     if missing:
         print(f"  {RED}ERROR: Source files not found:{RESET}")
@@ -700,6 +808,43 @@ def main() -> int:
         print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['src_lines']:,} lines]")
 
     # -----------------------------------------------------------------------
+    # Sync hook scripts (verbatim copy)
+    # -----------------------------------------------------------------------
+    print()
+    print(f"  {CYAN}Hook scripts:{RESET}")
+    hook_stats = []
+    for src_rel, dst_rel in HOOK_FILES:
+        src_path = CLAUDE_HOME / src_rel
+        dst_path = SRC_DIR / dst_rel
+        stats = sync_file(src_path, dst_path, dry_run=dry_run)
+        hook_stats.append((dst_rel, stats))
+        status = "would copy" if dry_run else "copied"
+        name = Path(dst_rel).name
+        print(f"    {GREEN}{name:<22}{RESET} [{status} - {stats['src_lines']:,} lines]")
+
+    # -----------------------------------------------------------------------
+    # Extract CLAUDE.md functionmap instructions section
+    # -----------------------------------------------------------------------
+    print()
+    print(f"  {CYAN}CLAUDE.md section:{RESET}")
+    claude_dst = SRC_DIR / "claude-md" / "functionmap-instructions.md"
+    claude_stats = sync_claude_md_section(
+        claude_dst,
+        dry_run=dry_run,
+        substitutions=substitutions,
+    )
+    name   = "functionmap-instructions.md"
+    status = "would extract" if dry_run else "extracted"
+
+    if claude_stats["skipped"]:
+        print(f"    {RED}{name:<22}{RESET} [SKIPPED]")
+    else:
+        print(f"    {GREEN}{name:<22}{RESET} [{status} - {claude_stats['dst_lines']:,} lines]")
+
+    for w in claude_stats["warnings"]:
+        print(f"      {YELLOW}WARNING: {w}{RESET}")
+
+    # -----------------------------------------------------------------------
     # Version management
     # -----------------------------------------------------------------------
     all_warnings = []
@@ -711,9 +856,10 @@ def main() -> int:
     # Determine if any synced files actually changed
     has_changes = any(
         stats["changed"]
-        for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats
+        for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats + hook_stats
         if not stats["skipped"]
     )
+    has_changes = has_changes or claude_stats.get("changed", False)
 
     # Decide what to bump
     if do_major:
@@ -758,8 +904,9 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Collect all warnings
     # -----------------------------------------------------------------------
-    for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats:
+    for _, stats in tool_stats + js_stats + skill_stats + doc_stats + mcp_stats + hook_stats:
         all_warnings.extend(stats["warnings"])
+    all_warnings.extend(claude_stats["warnings"])
 
     # -----------------------------------------------------------------------
     # Summary
@@ -772,7 +919,7 @@ def main() -> int:
         print(f"  {BOLD}  SYNC COMPLETE{RESET}")
     print(f"  {'=' * 60}")
 
-    total_files = len(tool_stats) + len(js_stats) + len(skill_stats) + len(doc_stats) + len(mcp_stats)
+    total_files = len(tool_stats) + len(js_stats) + len(skill_stats) + len(doc_stats) + len(mcp_stats) + len(hook_stats) + 1  # +1 for claude-md
     print(f"  {total_files} files processed")
 
     if all_warnings:

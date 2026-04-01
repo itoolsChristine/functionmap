@@ -18,14 +18,17 @@ $ToolsDir   = Join-Path $ClaudeDir "tools\functionmap"
 $CommandsDir = Join-Path $ClaudeDir "commands"
 $DocsDir    = Join-Path $ClaudeDir "docs"
 $MapsDir    = Join-Path $ClaudeDir "functionmap"
-$McpDir     = Join-Path $ClaudeDir "functionmap-mcp"
-$ClaudeMd   = Join-Path $ClaudeDir "CLAUDE.md"
-$ClaudeJson = Join-Path $HomeDir ".claude.json"
+$McpDir      = Join-Path $ClaudeDir "functionmap-mcp"
+$ScriptsDir  = Join-Path $ClaudeDir "scripts\functionmap"
+$ClaudeMd    = Join-Path $ClaudeDir "CLAUDE.md"
+$ClaudeJson  = Join-Path $HomeDir ".claude.json"
+$SettingsJson = Join-Path $ClaudeDir "settings.json"
 
 $ToolFiles    = @("functionmap.py", "categorize.py", "quickmap.py", "thirdparty.py", "describe.py", "build-callgraph.cjs")
 $CommandFiles = @("functionmap.md", "functionmap-update.md")
 $DocFiles     = @("functionmap-help.md", "functionmap-mcp.md")
 $McpFiles     = @("server.py", "index.py", "search.py", "requirements.txt")
+$HookFiles    = @("session-start.sh", "session-start.py")
 
 # ============================================================================
 #  CLI flag handling
@@ -576,6 +579,67 @@ function Register-Mcp {
 }
 
 # ============================================================================
+#  Hook installation
+# ============================================================================
+
+function Install-Hooks {
+    if (-not (Test-Path $ScriptsDir)) {
+        New-Item -ItemType Directory -Path $ScriptsDir -Force | Out-Null
+    }
+
+    foreach ($f in $HookFiles) {
+        $src = Join-Path $PSScriptRoot "src\hooks\$f"
+        $dst = Join-Path $ScriptsDir $f
+        if (Test-Path $src) {
+            Copy-Item $src $dst -Force
+        }
+    }
+    Write-Ok "Hook scripts installed ($($HookFiles.Count) files)"
+
+    # Register SessionStart hook in settings.json
+    if (-not (Test-Path $SettingsJson)) {
+        '{"hooks":{}}' | Set-Content $SettingsJson -Encoding UTF8
+    }
+
+    try {
+        $settings = Get-Content $SettingsJson -Raw | ConvertFrom-Json
+        if (-not $settings.hooks) {
+            $settings | Add-Member -NotePropertyName "hooks" -NotePropertyValue @{} -Force
+        }
+
+        $scriptsFwd = $ScriptsDir -replace '\\', '/'
+        $fmCommand = "bash `"$scriptsFwd/session-start.sh`""
+        $newGroup = @{
+            "matcher" = "startup|resume"
+            "hooks" = @(@{ "type" = "command"; "command" = $fmCommand })
+        }
+
+        if (-not $settings.hooks.SessionStart) {
+            $settings.hooks | Add-Member -NotePropertyName "SessionStart" -NotePropertyValue @() -Force
+        }
+
+        # Find existing functionmap entry
+        $existingIdx = -1
+        for ($i = 0; $i -lt $settings.hooks.SessionStart.Count; $i++) {
+            foreach ($h in $settings.hooks.SessionStart[$i].hooks) {
+                if ($h.command -match 'functionmap') { $existingIdx = $i; break }
+            }
+        }
+
+        if ($existingIdx -ge 0) {
+            $settings.hooks.SessionStart[$existingIdx] = $newGroup
+        } else {
+            $settings.hooks.SessionStart += $newGroup
+        }
+
+        $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsJson -Encoding UTF8
+        Write-Ok "SessionStart hook registered in settings.json"
+    } catch {
+        Write-Warn "Failed to register hook in settings.json: $_"
+    }
+}
+
+# ============================================================================
 #  Post-install verification
 # ============================================================================
 
@@ -602,6 +666,12 @@ function Test-Installation {
         (Join-Path $CommandsDir "functionmap-update.md"),
         (Join-Path $DocsDir "functionmap-help.md")
     )
+    # Hook files
+    $expectedFiles += @(
+        (Join-Path $ScriptsDir "session-start.sh"),
+        (Join-Path $ScriptsDir "session-start.py")
+    )
+
     if ($script:InstallMcp -eq "yes") {
         $expectedFiles += @(
             (Join-Path $DocsDir "functionmap-mcp.md"),
@@ -697,6 +767,7 @@ try {
     Write-VersionFile
     Update-ClaudeMd
     Register-Mcp
+    Install-Hooks
     $null = Test-Installation
     Show-Success
     if ($script:BackupDir) {

@@ -26,9 +26,10 @@ There are two copies of the functionmap tools:
 | `src/docs/` | Help documentation | Yes |
 | `src/mcp/` | MCP server for fast function search (4 files) | Yes |
 | `src/claude-md/` | CLAUDE.md integration content (instructions + registry templates) | Yes |
+| `src/hooks/` | SessionStart hook scripts (project detection at session start) | Yes |
 | `temp/` | Sandboxed test directory (created/destroyed by test_install_uninstall.sh) | No (gitignored) |
 
-### Installed file manifest (9 core + 5 optional MCP)
+### Installed file manifest (9 core + 2 hooks + 5 optional MCP)
 
 **Core files (always installed):**
 
@@ -43,6 +44,14 @@ There are two copies of the functionmap tools:
 | `functionmap.md` | `~/.claude/commands/` |
 | `functionmap-update.md` | `~/.claude/commands/` |
 | `functionmap-help.md` | `~/.claude/docs/` |
+
+**Hook files (always installed):**
+
+| File | Destination |
+|------|-------------|
+| `session-start.sh` | `~/.claude/scripts/functionmap/` |
+| `session-start.py` | `~/.claude/scripts/functionmap/` |
+| SessionStart hook entry | Merged into `~/.claude/settings.json` |
 
 **MCP files (optional, included by default):**
 
@@ -64,6 +73,8 @@ The installer prompts for MCP inclusion. Use `--mcp` / `--no-mcp` flags to bypas
 2. Run `sync.cmd` (or `python sync.py`) to pull changes into `src/`
 3. sync.py automatically:
    - Copies Python/JS tools verbatim
+   - Copies hook scripts to `src/hooks/`
+   - Extracts the FUNCTIONMAP:INSTRUCTIONS section from `~/.claude/CLAUDE.md` into `src/claude-md/`
    - Applies path normalization to .md files (`C:\Users\...` -> `$HOME/...`)
    - Strips /swarm references from `functionmap.md` (distribution doesn't include /swarm)
    - Applies project-specific substitutions from `substitutions.local.json`
@@ -112,13 +123,13 @@ Python 3.10 + 3.12 across ubuntu, macos, windows (6 jobs). Uses `FORCE_JAVASCRIP
 
 The installer injects two sentinel-delimited blocks into the user's `~/.claude/CLAUDE.md`:
 
-1. **Instructions block** (`FUNCTIONMAP:INSTRUCTIONS:BEGIN/END`) -- Teaches Claude the 5-step discovery procedure. Static content from `src/claude-md/functionmap-instructions.md`. This file is manually maintained (NOT synced from live) because the live version has InteractiveTools-specific language.
+1. **Instructions block** (`FUNCTIONMAP:INSTRUCTIONS:BEGIN/END`) -- Teaches Claude how to use function maps with examples. Content extracted from `~/.claude/CLAUDE.md` by `sync.py` (between sentinel tags) and written to `src/claude-md/functionmap-instructions.md` with substitutions applied.
 
 2. **Registry block** (`FUNCTIONMAP:BEGIN/END`) -- Lists available maps. Starts empty; populated at runtime by `/functionmap` and `/functionmap-update`.
 
 ## Things to Watch Out For
 
 - **Never edit `src/` directly** -- changes will be overwritten by the next sync. Edit live files, then sync.
-- **`src/claude-md/functionmap-instructions.md` is the exception** -- it's manually maintained for generic (non-InteractiveTools) language. NOT copied from the live CLAUDE.md.
+- **`~/.claude/settings.json` is Claude Code's settings file** -- the install/uninstall scripts only touch the `hooks.SessionStart` functionmap entry. Never truncate or replace the whole file.
 - **CRLF handling**: The live files on Windows have CRLF endings. sync.py writes LF to `src/`. `patch_py_version()` must use `read_text()` (not `read_bytes().decode()`) to avoid doubling carriage returns.
 - **`substitutions.local.json` is gitignored** -- it contains personal paths. Each developer creates their own from `substitutions.example.json`.

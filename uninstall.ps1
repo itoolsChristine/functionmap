@@ -2,15 +2,17 @@
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
-$HomeDir     = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
-$ClaudeDir   = Join-Path $HomeDir ".claude"
-$ToolsDir    = Join-Path $ClaudeDir "tools\functionmap"
-$CommandsDir = Join-Path $ClaudeDir "commands"
-$DocsDir     = Join-Path $ClaudeDir "docs"
-$MapsDir     = Join-Path $ClaudeDir "functionmap"
-$McpDir      = Join-Path $ClaudeDir "functionmap-mcp"
-$ClaudeMd    = Join-Path $ClaudeDir "CLAUDE.md"
-$ClaudeJson  = Join-Path $HomeDir ".claude.json"
+$HomeDir      = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+$ClaudeDir    = Join-Path $HomeDir ".claude"
+$ToolsDir     = Join-Path $ClaudeDir "tools\functionmap"
+$CommandsDir  = Join-Path $ClaudeDir "commands"
+$DocsDir      = Join-Path $ClaudeDir "docs"
+$MapsDir      = Join-Path $ClaudeDir "functionmap"
+$McpDir       = Join-Path $ClaudeDir "functionmap-mcp"
+$ScriptsDir   = Join-Path $ClaudeDir "scripts\functionmap"
+$ClaudeMd     = Join-Path $ClaudeDir "CLAUDE.md"
+$ClaudeJson   = Join-Path $HomeDir ".claude.json"
+$SettingsJson = Join-Path $ClaudeDir "settings.json"
 
 # ============================================================================
 #  Banner
@@ -34,10 +36,11 @@ $hasTools    = Test-Path $ToolsDir
 $hasCmds     = (Test-Path (Join-Path $CommandsDir "functionmap.md")) -or (Test-Path (Join-Path $CommandsDir "functionmap-update.md"))
 $hasDocs     = (Test-Path (Join-Path $DocsDir "functionmap-help.md")) -or (Test-Path (Join-Path $DocsDir "functionmap-mcp.md"))
 $hasMcp      = Test-Path $McpDir
+$hasHooks    = Test-Path $ScriptsDir
 $hasClaudeMd = Test-Path $ClaudeMd
 $hasMaps     = (Test-Path $MapsDir) -and (Get-ChildItem $MapsDir -ErrorAction SilentlyContinue | Select-Object -First 1)
 
-if (-not $hasTools -and -not $hasCmds -and -not $hasDocs -and -not $hasMcp) {
+if (-not $hasTools -and -not $hasCmds -and -not $hasDocs -and -not $hasMcp -and -not $hasHooks) {
     Write-Info "Functionmap does not appear to be installed. Nothing to uninstall."
     exit 0
 }
@@ -49,6 +52,7 @@ if ($hasTools)    { Write-Host "    - Python tools ($ToolsDir)" }
 if ($hasCmds)     { Write-Host "    - Skill commands (functionmap.md, functionmap-update.md)" }
 if ($hasDocs)     { Write-Host "    - Help documentation (functionmap-help.md)" }
 if ($hasMcp)      { Write-Host "    - MCP server ($McpDir)" }
+if ($hasHooks)    { Write-Host "    - Hook scripts ($ScriptsDir)" }
 if ($hasClaudeMd) { Write-Host "    - CLAUDE.md (functionmap sentinel blocks will be removed)" }
 if ($hasMaps)     { Write-Host "    - Generated function maps ($MapsDir)" }
 Write-Host ""
@@ -78,7 +82,8 @@ $hasExisting = (Test-Path $ToolsDir) -or
     (Test-Path (Join-Path $CommandsDir "functionmap-update.md")) -or
     (Test-Path (Join-Path $DocsDir "functionmap-help.md")) -or
     (Test-Path (Join-Path $DocsDir "functionmap-mcp.md")) -or
-    (Test-Path $McpDir)
+    (Test-Path $McpDir) -or
+    (Test-Path $ScriptsDir)
 
 if ($hasExisting) {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -102,6 +107,11 @@ if ($hasExisting) {
     if (Test-Path $McpDir) {
         New-Item -ItemType Directory -Path "$BackupDir\mcp" -Force | Out-Null
         Get-ChildItem $McpDir -File | ForEach-Object { Copy-Item $_.FullName "$BackupDir\mcp\$($_.Name)" -Force }
+    }
+    # Back up hook scripts
+    if (Test-Path $ScriptsDir) {
+        New-Item -ItemType Directory -Path "$BackupDir\hooks" -Force | Out-Null
+        Get-ChildItem $ScriptsDir -File | ForEach-Object { Copy-Item $_.FullName "$BackupDir\hooks\$($_.Name)" -Force }
     }
 
     if (Test-Path $ClaudeMd) { Copy-Item $ClaudeMd "$BackupDir\CLAUDE.md" -Force }
@@ -155,6 +165,14 @@ if (Test-Path $McpDir) {
     Write-Info "MCP server directory not found (already removed?)"
 }
 
+# Hook scripts
+if (Test-Path $ScriptsDir) {
+    Remove-Item $ScriptsDir -Recurse -Force
+    Write-Ok "Removed $ScriptsDir"
+} else {
+    Write-Info "Hook scripts directory not found (already removed?)"
+}
+
 # Deregister from .claude.json
 if (Test-Path $ClaudeJson) {
     try {
@@ -166,6 +184,38 @@ if (Test-Path $ClaudeJson) {
         }
     } catch {
         Write-Warn "Failed to update .claude.json: $_"
+    }
+}
+
+# Deregister SessionStart hook from settings.json
+if (Test-Path $SettingsJson) {
+    try {
+        $settings = Get-Content $SettingsJson -Raw | ConvertFrom-Json
+        if ($settings.hooks -and $settings.hooks.SessionStart) {
+            $sessionStart = @($settings.hooks.SessionStart)
+            $filtered = @($sessionStart | Where-Object {
+                $dominated = $false
+                foreach ($h in $_.hooks) {
+                    if ($h.command -match 'functionmap') { $dominated = $true; break }
+                }
+                -not $dominated
+            })
+            if ($filtered.Count -lt $sessionStart.Count) {
+                if ($filtered.Count -gt 0) {
+                    $settings.hooks.SessionStart = $filtered
+                } else {
+                    $settings.hooks.PSObject.Properties.Remove("SessionStart")
+                }
+                # Clean up empty hooks object
+                if (-not ($settings.hooks.PSObject.Properties | Select-Object -First 1)) {
+                    $settings.PSObject.Properties.Remove("hooks")
+                }
+                $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsJson -Encoding UTF8
+                Write-Ok "SessionStart hook deregistered from settings.json"
+            }
+        }
+    } catch {
+        Write-Warn "Failed to update settings.json: $_"
     }
 }
 

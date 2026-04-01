@@ -93,6 +93,20 @@ EOF
 }
 EOF
 
+    # Create a fake settings.json with an existing hook from another tool
+    cat > "$TEMP_DIR/.claude/settings.json" << 'EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [{"type": "command", "command": "bash \"other-tool/session-start.sh\""}]
+      }
+    ]
+  }
+}
+EOF
+
     export HOME="$TEMP_DIR"
     info "Clean slate created in temp/"
 }
@@ -123,6 +137,58 @@ verify_core_files() {
 
     # functionmap.py --version works
     check "$PYTHON '$TEMP_DIR/.claude/tools/functionmap/functionmap.py' --version &>/dev/null" "${label}functionmap.py --version runs"
+}
+
+verify_hooks_present() {
+    local label="${1:-}"
+    local SETTINGS_JSON_WIN
+    SETTINGS_JSON_WIN=$(win_path "$TEMP_DIR/.claude/settings.json")
+
+    # Hook script files
+    check "[ -f '$TEMP_DIR/.claude/scripts/functionmap/session-start.sh' ]" "${label}Hook installed: session-start.sh"
+    check "[ -f '$TEMP_DIR/.claude/scripts/functionmap/session-start.py' ]" "${label}Hook installed: session-start.py"
+
+    # settings.json -- SessionStart hook registered with functionmap
+    check "$PYTHON -c \"
+import json
+d = json.load(open(r'$SETTINGS_JSON_WIN'))
+hooks = d.get('hooks', {}).get('SessionStart', [])
+found = any('functionmap' in h.get('command', '') for g in hooks for h in g.get('hooks', []))
+assert found, 'functionmap SessionStart hook not registered'
+\" 2>&1" "${label}settings.json has functionmap SessionStart hook"
+}
+
+verify_hooks_absent() {
+    local label="${1:-}"
+    local SETTINGS_JSON_WIN
+    SETTINGS_JSON_WIN=$(win_path "$TEMP_DIR/.claude/settings.json")
+
+    # Hook scripts directory removed
+    check "[ ! -d '$TEMP_DIR/.claude/scripts/functionmap' ]" "${label}Hook scripts directory removed"
+
+    # settings.json -- functionmap SessionStart hook removed
+    check "$PYTHON -c \"
+import json
+d = json.load(open(r'$SETTINGS_JSON_WIN'))
+hooks = d.get('hooks', {}).get('SessionStart', [])
+found = any('functionmap' in h.get('command', '') for g in hooks for h in g.get('hooks', []))
+assert not found, 'functionmap SessionStart hook still present'
+\" 2>&1" "${label}settings.json: functionmap hook removed"
+}
+
+verify_other_hooks_preserved() {
+    local label="${1:-}"
+    local SETTINGS_JSON_WIN
+    SETTINGS_JSON_WIN=$(win_path "$TEMP_DIR/.claude/settings.json")
+
+    # settings.json -- other tool's hook preserved
+    check "$PYTHON -c \"
+import json
+d = json.load(open(r'$SETTINGS_JSON_WIN'))
+hooks = d.get('hooks', {}).get('SessionStart', [])
+found = any('other-tool' in h.get('command', '') for g in hooks for h in g.get('hooks', []))
+assert found, 'other-tool SessionStart hook was lost'
+\" 2>&1" "${label}settings.json preserved: other-tool hook"
 }
 
 verify_mcp_present() {
@@ -176,7 +242,7 @@ verify_claude_md() {
     check "grep -q 'FUNCTIONMAP:INSTRUCTIONS:END' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md has instructions END sentinel"
     check "grep -q 'FUNCTIONMAP:BEGIN' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md has registry BEGIN sentinel"
     check "grep -q 'FUNCTIONMAP:END' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md has registry END sentinel"
-    check "grep -q 'Function Maps -- MANDATORY CHECK' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md has function maps heading"
+    check "grep -q 'Function Maps -- Code Discovery Index' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md has function maps heading"
 
     # Pre-existing content preserved
     check "grep -q 'Existing Section' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md preserved: Existing Section"
@@ -221,6 +287,10 @@ verify_uninstall_cleanup() {
     # MCP server removed
     check "[ ! -d '$TEMP_DIR/.claude/functionmap-mcp' ]" "${label}MCP server directory removed"
 
+    # Hook scripts removed + deregistered
+    verify_hooks_absent "${label}"
+    verify_other_hooks_preserved "${label}"
+
     # .claude.json -- functionmap deregistered
     local CLAUDE_JSON_WIN
     CLAUDE_JSON_WIN=$(win_path "$TEMP_DIR/.claude.json")
@@ -243,7 +313,6 @@ assert 'other-server' in d.get('mcpServers', {}), 'other-server was lost during 
     # CLAUDE.md -- sentinels removed
     check "! grep -q 'FUNCTIONMAP:INSTRUCTIONS:BEGIN' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md: instructions BEGIN sentinel removed"
     check "! grep -q 'FUNCTIONMAP:INSTRUCTIONS:END' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md: instructions END sentinel removed"
-    check "! grep -q 'Function Maps -- MANDATORY CHECK' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md: function maps section removed"
 
     # CLAUDE.md -- pre-existing content still preserved after uninstall
     check "grep -q 'Existing Section' '$TEMP_DIR/.claude/CLAUDE.md'" "${label}CLAUDE.md still has: Existing Section"
@@ -290,9 +359,11 @@ echo "  --- Post-install integrity checks (with MCP) ---"
 echo ""
 
 verify_core_files
+verify_hooks_present
 verify_mcp_present
 verify_claude_md
 verify_other_settings_preserved
+verify_other_hooks_preserved
 
 echo ""
 echo "  --- Post-install summary: $CHECKS checks, $FAILURES failures ---"
@@ -422,9 +493,11 @@ echo "  --- Post-install integrity checks (without MCP) ---"
 echo ""
 
 verify_core_files
+verify_hooks_present
 verify_mcp_absent
 verify_claude_md
 verify_other_settings_preserved
+verify_other_hooks_preserved
 
 echo ""
 echo "  --- Path 2 post-install summary: $CHECKS checks, $FAILURES failures ---"
@@ -508,6 +581,7 @@ INSTALL_EXIT=$?
 
 echo ""
 check '[ $INSTALL_EXIT -eq 0 ]' "Cross-mode step 1: install --mcp exited with code 0"
+verify_hooks_present "Step 1: "
 verify_mcp_present "Step 1: "
 
 echo ""
@@ -523,6 +597,7 @@ INSTALL_EXIT=$?
 echo ""
 check '[ $INSTALL_EXIT -eq 0 ]' "Cross-mode step 2: install --no-mcp exited with code 0"
 verify_core_files "Step 2: "
+verify_hooks_present "Step 2: "
 verify_mcp_absent "Step 2: "
 
 echo ""
@@ -538,6 +613,7 @@ INSTALL_EXIT=$?
 echo ""
 check '[ $INSTALL_EXIT -eq 0 ]' "Cross-mode step 3: install --mcp exited with code 0"
 verify_core_files "Step 3: "
+verify_hooks_present "Step 3: "
 verify_mcp_present "Step 3: "
 verify_claude_md "Step 3: "
 

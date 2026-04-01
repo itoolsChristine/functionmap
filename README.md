@@ -2,7 +2,7 @@
 
 **Give Claude a map of your codebase so it finds existing functions before writing new ones.**
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.1-blue)
 [![CI](https://github.com/itoolsChristine/functionmap/actions/workflows/ci.yml/badge.svg)](https://github.com/itoolsChristine/functionmap/actions/workflows/ci.yml)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -118,9 +118,15 @@ Incremental updates are ~98% cheaper than a full remap.
 |       |-- {lib}/{version}/
 |           |-- categories.md
 |           |-- ...
+
+~/.claude/scripts/functionmap/
+|-- session-start.sh                # SessionStart hook (bash wrapper)
+|-- session-start.py                # SessionStart hook (project detection logic)
 ```
 
 Each category `.md` file contains a table of functions with their signatures, file paths, line numbers, and descriptions -- everything Claude needs to decide whether to use an existing function or write a new one.
+
+**SessionStart hook:** Automatically detects if the current project has a function map at session start and tells Claude which project is mapped, how many functions it has, and what dependencies to also search.
 
 ## CLAUDE.md Integration
 
@@ -131,6 +137,8 @@ The installer adds two blocks to your `~/.claude/CLAUDE.md`, both delimited by s
 2. **Registry block** (`<!-- FUNCTIONMAP:BEGIN/END -->`) -- Lists all available maps. Auto-populated each time you run `/functionmap` on a project.
 
 **Both blocks are required.** Without the instructions block, Claude generates maps but never consults them. Without the registry block, Claude doesn't know which projects have maps available.
+
+The installer also registers a **SessionStart hook** in `~/.claude/settings.json` that runs at session start and resume. The hook detects if the current working directory matches a mapped project and outputs context telling Claude which project is mapped, how many functions it has, and what dependency projects to also search.
 
 ## Updating
 
@@ -171,6 +179,7 @@ This removes installed commands, tools, docs, and CLAUDE.md sentinel blocks. You
 | Commands not showing up | Restart Claude Code after installation |
 | Maps generated but Claude doesn't use them | Check that both CLAUDE.md sentinel blocks are present (instructions + registry) |
 | Want to add/remove MCP after install | Re-run the installer with `--mcp` or `--no-mcp` |
+| Hook not detecting project at session start | Verify `~/.claude/settings.json` has a `SessionStart` hook entry and the project has a `_meta.json` with a valid `root_path` |
 
 ## Architecture
 
@@ -215,8 +224,12 @@ functionmap/
 |   |   |-- requirements.txt
 |   |
 |   |-- claude-md/                 # CLAUDE.md integration content
-|       |-- functionmap-instructions.md
-|       |-- functionmap-registry.md
+|   |   |-- functionmap-instructions.md
+|   |   |-- functionmap-registry.md
+|   |
+|   |-- hooks/                     # SessionStart hook scripts
+|       |-- session-start.sh
+|       |-- session-start.py
 |
 |-- tests/
 |   |-- test_install_uninstall.sh  # End-to-end install/integrity/uninstall test

@@ -8,8 +8,10 @@ COMMANDS_DIR="$CLAUDE_DIR/commands"
 DOCS_DIR="$CLAUDE_DIR/docs"
 MAPS_DIR="$CLAUDE_DIR/functionmap"
 MCP_DIR="$CLAUDE_DIR/functionmap-mcp"
+SCRIPTS_DIR="$CLAUDE_DIR/scripts/functionmap"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 CLAUDE_JSON="$HOME/.claude.json"
+SETTINGS_JSON="$CLAUDE_DIR/settings.json"
 
 # ============================================================================
 #  Banner
@@ -33,6 +35,7 @@ has_tools=false
 has_cmds=false
 has_docs=false
 has_mcp=false
+has_hooks=false
 has_claude_md=false
 has_maps=false
 
@@ -40,10 +43,11 @@ has_maps=false
 [ -f "$COMMANDS_DIR/functionmap.md" ] || [ -f "$COMMANDS_DIR/functionmap-update.md" ] && has_cmds=true
 [ -f "$DOCS_DIR/functionmap-help.md" ] || [ -f "$DOCS_DIR/functionmap-mcp.md" ] && has_docs=true
 [ -d "$MCP_DIR" ] && has_mcp=true
+[ -d "$SCRIPTS_DIR" ] && has_hooks=true
 [ -f "$CLAUDE_MD" ] && has_claude_md=true
 [ -d "$MAPS_DIR" ] && [ "$(ls -A "$MAPS_DIR" 2>/dev/null)" ] && has_maps=true
 
-if ! $has_tools && ! $has_cmds && ! $has_docs && ! $has_mcp; then
+if ! $has_tools && ! $has_cmds && ! $has_docs && ! $has_mcp && ! $has_hooks; then
     info "Functionmap does not appear to be installed. Nothing to uninstall."
     exit 0
 fi
@@ -55,6 +59,7 @@ if $has_tools;     then echo "    - Python tools ($TOOLS_DIR)"; fi
 if $has_cmds;      then echo "    - Skill commands (functionmap.md, functionmap-update.md)"; fi
 if $has_docs;      then echo "    - Help documentation (functionmap-help.md)"; fi
 if $has_mcp;       then echo "    - MCP server ($MCP_DIR)"; fi
+if $has_hooks;     then echo "    - Hook scripts ($SCRIPTS_DIR)"; fi
 if $has_claude_md; then echo "    - CLAUDE.md (functionmap sentinel blocks will be removed)"; fi
 if $has_maps;      then echo "    - Generated function maps ($MAPS_DIR)"; fi
 echo ""
@@ -91,6 +96,7 @@ has_existing=false
 [ -f "$DOCS_DIR/functionmap-help.md" ] && has_existing=true
 [ -f "$DOCS_DIR/functionmap-mcp.md" ] && has_existing=true
 [ -d "$MCP_DIR" ] && has_existing=true
+[ -d "$SCRIPTS_DIR" ] && has_existing=true
 
 if $has_existing; then
     BACKUP_DIR="$CLAUDE_DIR/.functionmap-backup-$(date +%Y%m%d-%H%M%S)"
@@ -115,6 +121,12 @@ if $has_existing; then
     if [ -d "$MCP_DIR" ]; then
         mkdir -p "$BACKUP_DIR/mcp"
         cp "$MCP_DIR"/* "$BACKUP_DIR/mcp/" 2>/dev/null || true
+    fi
+
+    # Back up hook scripts
+    if [ -d "$SCRIPTS_DIR" ]; then
+        mkdir -p "$BACKUP_DIR/hooks"
+        cp "$SCRIPTS_DIR"/* "$BACKUP_DIR/hooks/" 2>/dev/null || true
     fi
 
     # Back up CLAUDE.md
@@ -169,6 +181,14 @@ else
     info "MCP server directory not found (already removed?)"
 fi
 
+# Hook scripts
+if [ -d "$SCRIPTS_DIR" ]; then
+    rm -rf "$SCRIPTS_DIR"
+    ok "Removed $SCRIPTS_DIR"
+else
+    info "Hook scripts directory not found (already removed?)"
+fi
+
 # Deregister from .claude.json
 if [ -f "$CLAUDE_JSON" ]; then
     PYTHON=""
@@ -184,6 +204,42 @@ try:
         del data['mcpServers']['functionmap']
         with open(path, 'w') as f:
             json.dump(data, f, indent=2)
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+PYEOF
+    fi
+fi
+
+# Deregister SessionStart hook from settings.json
+if [ -f "$SETTINGS_JSON" ]; then
+    PYTHON=""
+    command -v python3 &>/dev/null && PYTHON="python3" || PYTHON="python"
+    if [ -n "$PYTHON" ]; then
+        $PYTHON - "$SETTINGS_JSON" << 'PYEOF' 2>/dev/null && ok "SessionStart hook deregistered from settings.json"
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    hooks = data.get('hooks', {})
+    session_start = hooks.get('SessionStart', [])
+    if not session_start:
+        sys.exit(0)
+    # Remove entries whose command references functionmap
+    filtered = [g for g in session_start if not any(
+        'functionmap' in h.get('command', '') for h in g.get('hooks', [])
+    )]
+    if len(filtered) < len(session_start):
+        if filtered:
+            data['hooks']['SessionStart'] = filtered
+        else:
+            del data['hooks']['SessionStart']
+        # Clean up empty hooks dict
+        if not data['hooks']:
+            del data['hooks']
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
 except (FileNotFoundError, json.JSONDecodeError):
     pass
 PYEOF
